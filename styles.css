@@ -112,6 +112,7 @@ h1 span {
   text-transform: uppercase;
 }
 
+.mode-select-heading,
 .tank-select-heading {
   display: flex;
   align-items: baseline;
@@ -124,10 +125,162 @@ h1 span {
   text-transform: uppercase;
 }
 
+.mode-select-heading small,
 .tank-select-heading small {
   color: rgba(120, 255, 154, 0.4);
   font-size: 8px;
   letter-spacing: 0.04em;
+}
+
+.mode-selection {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 11px;
+}
+
+.mode-button {
+  min-width: 0;
+  padding: 9px 7px;
+  border-color: rgba(120, 255, 154, 0.28);
+  background: rgba(5, 22, 11, 0.58);
+  color: rgba(120, 255, 154, 0.62);
+  box-shadow: none;
+  font-size: 10px;
+}
+
+.mode-button:hover,
+.mode-button:focus-visible {
+  border-color: var(--green);
+  background: rgba(15, 53, 27, 0.72);
+  color: var(--green);
+}
+
+.mode-button.selected {
+  border-color: var(--amber);
+  background: rgba(255, 211, 106, 0.1);
+  color: var(--amber);
+}
+
+.online-panel {
+  margin: 0 0 15px;
+  padding: 11px 13px;
+  border: 1px solid rgba(120, 255, 154, 0.2);
+  background: rgba(1, 13, 6, 0.62);
+}
+
+.join-fields {
+  display: grid;
+  grid-template-columns: auto minmax(110px, 170px);
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.join-fields label {
+  color: rgba(220, 255, 228, 0.62);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.join-fields input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid rgba(120, 255, 154, 0.5);
+  border-radius: 0;
+  outline: none;
+  background: #020805;
+  color: var(--amber);
+  font: 900 17px/1 "Courier New", monospace;
+  letter-spacing: 0.24em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.join-fields input:focus {
+  border-color: var(--amber);
+  box-shadow: 0 0 12px rgba(255, 211, 106, 0.12);
+}
+
+.room-readout {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 14px;
+  text-align: left;
+}
+
+.room-readout > span {
+  color: rgba(120, 255, 154, 0.55);
+  font-size: 9px;
+  letter-spacing: 0.11em;
+}
+
+.room-readout strong {
+  color: var(--amber);
+  font-size: 20px;
+  letter-spacing: 0.2em;
+  text-shadow: 0 0 10px rgba(255, 211, 106, 0.25);
+}
+
+.room-readout small {
+  color: rgba(220, 255, 228, 0.58);
+  font-size: 8px;
+  text-align: right;
+  text-transform: uppercase;
+}
+
+.network-status {
+  min-height: 13px;
+  margin: 8px 0;
+  color: rgba(220, 255, 228, 0.58);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+}
+
+.network-status.error {
+  color: var(--danger);
+}
+
+.online-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+
+.online-actions .secondary-button {
+  min-width: 190px;
+  padding: 8px 13px;
+  border-color: var(--amber);
+  background: transparent;
+  color: var(--amber);
+  box-shadow: none;
+  font-size: 9px;
+}
+
+.online-actions .secondary-button:hover,
+.online-actions .secondary-button:focus-visible {
+  background: rgba(255, 211, 106, 0.13);
+}
+
+.online-actions .text-button {
+  min-width: 0;
+  padding: 5px;
+  border: 0;
+  background: transparent;
+  color: rgba(120, 255, 154, 0.55);
+  box-shadow: none;
+  font-size: 8px;
+  text-decoration: underline;
+}
+
+.online-actions .text-button:hover,
+.online-actions .text-button:focus-visible {
+  background: transparent;
+  color: var(--green);
 }
 
 .tank-selection {
@@ -282,6 +435,14 @@ button:focus-visible {
   outline-offset: 4px;
 }
 
+button:disabled {
+  border-color: rgba(120, 255, 154, 0.18);
+  background: rgba(120, 255, 154, 0.08);
+  color: rgba(120, 255, 154, 0.28);
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
 button small {
   display: block;
   margin-top: 5px;
@@ -373,6 +534,7 @@ button small {
 }
 
 @media (max-width: 620px) {
+  .mode-select-heading small,
   .tank-select-heading small {
     display: none;
   }
@@ -392,6 +554,17 @@ button small {
 
   .controls .recenter-control {
     display: flex;
+  }
+
+  .room-readout {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    gap: 4px;
+    text-align: center;
+  }
+
+  .room-readout small {
+    text-align: center;
   }
 }
 

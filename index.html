@@ -16,6 +16,52 @@
       <h1 id="game-title">BATTLE<span>ZONE</span></h1>
       <p class="tagline">Prototype d’assaut vectoriel</p>
 
+      <div class="mode-select-heading">
+        <span>Mode de déploiement</span>
+        <small>Le mode solo reste toujours disponible</small>
+      </div>
+
+      <div class="mode-selection" role="radiogroup" aria-label="Mode de jeu">
+        <button class="mode-button selected" type="button" role="radio" aria-checked="true" data-mode="solo">
+          Solo
+        </button>
+        <button class="mode-button" type="button" role="radio" aria-checked="false" data-mode="host">
+          Créer coop
+        </button>
+        <button class="mode-button" type="button" role="radio" aria-checked="false" data-mode="join">
+          Rejoindre
+        </button>
+      </div>
+
+      <section class="online-panel hidden" id="online-panel" aria-live="polite">
+        <div class="join-fields hidden" id="join-fields">
+          <label for="room-code-input">Code du salon</label>
+          <input
+            id="room-code-input"
+            type="text"
+            maxlength="5"
+            autocomplete="off"
+            spellcheck="false"
+            inputmode="text"
+            placeholder="ABCDE"
+          >
+        </div>
+        <div class="room-readout hidden" id="room-readout">
+          <span>CANAL COOP</span>
+          <strong id="room-code">-----</strong>
+          <small id="room-player-count">1 / 2 chars connectés</small>
+        </div>
+        <p class="network-status" id="network-status">Prêt à établir la liaison Firebase.</p>
+        <div class="online-actions">
+          <button class="secondary-button" id="online-action-button" type="button">
+            Créer le salon
+          </button>
+          <button class="text-button hidden" id="leave-room-button" type="button">
+            Quitter le salon
+          </button>
+        </div>
+      </section>
+
       <div class="tank-select-heading">
         <span>Choisissez votre châssis</span>
         <small>Configuration modifiable avant chaque mission</small>
@@ -68,8 +114,8 @@
       </div>
 
       <button id="start-button" type="button">
-        <span>Lancer la mission</span>
-        <small>Cliquer pour verrouiller la souris</small>
+        <span id="start-button-label">Lancer la mission</span>
+        <small id="start-button-help">Cliquer pour verrouiller la souris</small>
       </button>
       <p class="hint">ÉCHAP pour libérer la souris · P pour mettre en pause</p>
     </section>
@@ -88,6 +134,8 @@
     <div class="crt-overlay" aria-hidden="true"></div>
   </main>
 
+  <script src="firebase-config.js"></script>
+  <script src="multiplayer.js"></script>
   <script src="game.js"></script>
 </body>
 </html>

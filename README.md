@@ -2,7 +2,7 @@
 
 Un premier prototype jouable de combat de tanks en 3D vectorielle rétro.
 
-## Lancer le jeu
+## Lancer le jeu en solo
 
 Ouvrir `index.html` dans un navigateur moderne. Aucune installation ni connexion
 Internet n’est nécessaire.
@@ -15,6 +15,59 @@ py -m http.server 8000
 ```
 
 Puis ouvrir `http://localhost:8000`.
+
+## Configurer le mode coop avec Firebase
+
+Le premier jalon multijoueur utilise Firebase Authentication anonyme et Firebase
+Realtime Database. Le jeu local reste fluide à 60 images/s; les positions des
+deux joueurs sont envoyées environ 10 fois par seconde puis interpolées.
+Les données de ce jeu sont isolées sous `battlezone/rooms`, ce qui permet de
+partager une Realtime Database avec un autre projet utilisant déjà `rooms`.
+
+1. Créer ou ouvrir un projet dans la console Firebase.
+2. Ajouter une application Web au projet.
+3. Activer **Authentication > Sign-in method > Anonymous**.
+4. Créer une **Realtime Database**.
+5. Copier la configuration Web dans `firebase-config.js`.
+6. Publier le contenu fusionné de `firebase.rules.json` dans l’onglet **Rules**
+   de Realtime Database. Il conserve les règles du projet existant sous `rooms`
+   et ajoute celles de Battlezone sous `battlezone/rooms`.
+7. Servir le jeu en HTTP/HTTPS. Pour un essai local :
+
+```powershell
+py -m http.server 8000
+```
+
+Chaque joueur ouvre ensuite le jeu sur son propre ordinateur. Le premier choisit
+**Créer coop** et partage le code de cinq caractères. Le second choisit
+**Rejoindre** et entre ce code. Quand les deux chars sont connectés, l’hôte lance
+la mission et le largage démarre chez les deux joueurs.
+
+Le fichier `firebase.json` permet aussi de publier les règles et le site avec la
+CLI Firebase une fois le projet associé :
+
+```powershell
+firebase use --add
+firebase deploy
+```
+
+La configuration Web Firebase est publique par conception. Ne jamais y placer
+de secret; l’accès est protégé par l’authentification anonyme et les règles de
+Realtime Database.
+
+### État du multijoueur
+
+Ce premier jalon synchronise :
+
+- le salon privé à deux joueurs et son code d’invitation;
+- la présence et la déconnexion;
+- le type, la position, l’orientation, la tourelle et le blindage des deux chars;
+- le départ de mission déclenché par l’hôte;
+- la disposition des rochers grâce à une graine de monde commune.
+
+Les ennemis, les obus et le score sont encore simulés séparément sur chaque
+ordinateur. Le prochain jalon donnera l’autorité des ennemis et des vagues à
+l’hôte, puis répliquera leurs états aux deux joueurs.
 
 ## Commandes
 

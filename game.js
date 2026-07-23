@@ -12,6 +12,19 @@
   const restartButton = document.querySelector("#restart-button");
   const pauseLabel = document.querySelector("#pause-label");
   const tankCards = [...document.querySelectorAll(".tank-card")];
+  const modeButtons = [...document.querySelectorAll(".mode-button")];
+  const onlinePanel = document.querySelector("#online-panel");
+  const joinFields = document.querySelector("#join-fields");
+  const roomCodeInput = document.querySelector("#room-code-input");
+  const roomReadout = document.querySelector("#room-readout");
+  const roomCodeLabel = document.querySelector("#room-code");
+  const roomPlayerCount = document.querySelector("#room-player-count");
+  const networkStatus = document.querySelector("#network-status");
+  const onlineActionButton = document.querySelector("#online-action-button");
+  const leaveRoomButton = document.querySelector("#leave-room-button");
+  const startButtonLabel = document.querySelector("#start-button-label");
+  const startButtonHelp = document.querySelector("#start-button-help");
+  const network = window.BattlezoneNetwork;
 
   const TAU = Math.PI * 2;
   const NEAR = 0.22;
@@ -24,6 +37,7 @@
     faint: "rgba(62, 186, 95, 0.18)",
     amber: "#ffd36a",
     red: "#ff695e",
+    cyan: "#68d8ff",
     white: "#dcffe4",
     black: "#020504"
   };
@@ -174,12 +188,21 @@
   let enemySerial = 0;
   let audioContext = null;
   let selectedTankId = "scout";
+  let playMode = "solo";
+  let networkSnapshot = network?.getState() ?? {
+    configured: false,
+    connected: false,
+    players: {},
+    playerCount: 0
+  };
+  let localStateSequence = 0;
 
   const keys = new Set();
   const enemies = [];
   const shells = [];
   const particles = [];
   const rocks = [];
+  const remotePlayers = new Map();
 
   const player = {
     tankId: selectedTankId,
@@ -214,6 +237,196 @@
       card.classList.toggle("selected", selected);
       card.setAttribute("aria-checked", String(selected));
     }
+    network?.setTank(tankId).catch(() => {});
+  }
+
+  function updateLobbyUi() {
+    for (const button of modeButtons) {
+      const selected = button.dataset.mode === playMode;
+      button.classList.toggle("selected", selected);
+      button.setAttribute("aria-checked", String(selected));
+    }
+
+    const online = playMode !== "solo";
+    onlinePanel.classList.toggle("hidden", !online);
+    if (!online) {
+      startButton.disabled = false;
+      startButtonLabel.textContent = "Lancer la mission";
+      startButtonHelp.textContent = "Cliquer pour verrouiller la souris";
+      return;
+    }
+
+    const connected = networkSnapshot.connected;
+    const busy = ["connecting", "creating", "joining"].includes(networkSnapshot.phase);
+    const isHost = networkSnapshot.role === "host";
+    const roomReady = connected && networkSnapshot.playerCount >= 2;
+    joinFields.classList.toggle("hidden", playMode !== "join" || connected);
+    roomReadout.classList.toggle("hidden", !connected);
+    onlineActionButton.classList.toggle("hidden", connected);
+    leaveRoomButton.classList.toggle("hidden", !connected);
+    onlineActionButton.disabled = busy || !networkSnapshot.configured;
+    onlineActionButton.textContent = playMode === "host" ? "Créer le salon" : "Rejoindre le salon";
+
+    if (connected) {
+      roomCodeLabel.textContent = networkSnapshot.roomCode;
+      roomPlayerCount.textContent =
+        `${networkSnapshot.playerCount} / 2 chars connectés`;
+      networkStatus.classList.remove("error");
+      if (networkSnapshot.meta?.status === "closed") {
+        networkStatus.textContent = "L’hôte a fermé ce salon.";
+      } else if (roomReady) {
+        networkStatus.textContent = isHost
+          ? "Coéquipier connecté. Mission prête."
+          : "Liaison établie. En attente du lancement.";
+      } else {
+        networkStatus.textContent = "En attente du deuxième joueur…";
+      }
+
+      startButton.disabled = !isHost || !roomReady || networkSnapshot.meta?.status !== "lobby";
+      startButtonLabel.textContent = isHost ? "Lancer la mission coop" : "En attente de l’hôte";
+      startButtonHelp.textContent = isHost
+        ? "Le largage commencera sur les deux ordinateurs"
+        : "L’hôte contrôle le départ";
+      return;
+    }
+
+    startButton.disabled = true;
+    startButtonLabel.textContent =
+      playMode === "host" ? "Créez d’abord un salon" : "Rejoignez d’abord un salon";
+    startButtonHelp.textContent = "La mission démarrera quand les deux chars seront prêts";
+    networkStatus.classList.toggle("error", Boolean(networkSnapshot.error));
+
+    if (!networkSnapshot.configured) {
+      networkStatus.textContent = "Firebase doit être configuré dans firebase-config.js.";
+    } else if (networkSnapshot.error) {
+      networkStatus.textContent = networkSnapshot.error;
+    } else if (busy) {
+      networkStatus.textContent = "Établissement de la liaison Firebase…";
+    } else {
+      networkStatus.textContent =
+        playMode === "host"
+          ? "Créez un canal et partagez son code."
+          : "Entrez le code affiché chez votre coéquipier.";
+    }
+  }
+
+  async function selectPlayMode(mode) {
+    if (!["solo", "host", "join"].includes(mode) || mode === playMode) return;
+    if (networkSnapshot.connected) {
+      try {
+        await network.leaveRoom();
+      } catch {
+        // L'interface revient quand même au hangar local.
+      }
+    }
+    playMode = mode;
+    remotePlayers.clear();
+    updateLobbyUi();
+    if (mode === "join") roomCodeInput.focus();
+  }
+
+  function reconcileRemotePlayers(snapshot) {
+    if (!snapshot.connected) {
+      remotePlayers.clear();
+      return;
+    }
+
+    const seen = new Set();
+    for (const [slot, record] of Object.entries(snapshot.players)) {
+      if (record?.uid === snapshot.uid || !record?.state) continue;
+      const uid = record.uid ?? slot;
+      const state = record.state;
+      seen.add(uid);
+      const target = {
+        uid,
+        tankId: state.tankId === "bastion" ? "bastion" : "scout",
+        x: Number(state.x) || 0,
+        z: Number(state.z) || 0,
+        altitude: Number(state.altitude) || 0,
+        heading: Number(state.heading) || 0,
+        turretOffset: Number(state.turretOffset) || 0,
+        health: Number.isFinite(Number(state.health)) ? Number(state.health) : 100,
+        missionPhase: state.missionPhase ?? MISSION_PHASE.IDLE
+      };
+      const remote = remotePlayers.get(uid);
+      if (remote) {
+        remote.target = target;
+      } else {
+        remotePlayers.set(uid, { ...target, target });
+      }
+    }
+
+    for (const uid of remotePlayers.keys()) {
+      if (!seen.has(uid)) remotePlayers.delete(uid);
+    }
+  }
+
+  function handleNetworkSnapshot(snapshot) {
+    const previousStatus = networkSnapshot.meta?.status;
+    networkSnapshot = snapshot;
+    reconcileRemotePlayers(snapshot);
+    updateLobbyUi();
+
+    if (
+      snapshot.connected &&
+      snapshot.meta?.status === "playing" &&
+      previousStatus !== "playing" &&
+      !running
+    ) {
+      startGame();
+    }
+  }
+
+  async function createOrJoinRoom() {
+    if (!network?.getState().configured) {
+      updateLobbyUi();
+      return;
+    }
+    onlineActionButton.disabled = true;
+    try {
+      if (playMode === "host") {
+        await network.createRoom(selectedTankId);
+      } else {
+        await network.joinRoom(roomCodeInput.value, selectedTankId);
+      }
+    } catch {
+      // Le module réseau fournit le message détaillé à l'interface.
+    }
+  }
+
+  function updateRemotePlayers(dt) {
+    const blend = 1 - Math.exp(-dt * 13);
+    for (const remote of remotePlayers.values()) {
+      remote.x += (remote.target.x - remote.x) * blend;
+      remote.z += (remote.target.z - remote.z) * blend;
+      remote.altitude += (remote.target.altitude - remote.altitude) * blend;
+      remote.heading = normalizeAngle(
+        remote.heading + normalizeAngle(remote.target.heading - remote.heading) * blend
+      );
+      remote.turretOffset = normalizeAngle(
+        remote.turretOffset +
+        normalizeAngle(remote.target.turretOffset - remote.turretOffset) * blend
+      );
+      remote.health += (remote.target.health - remote.health) * blend;
+      remote.tankId = remote.target.tankId;
+      remote.missionPhase = remote.target.missionPhase;
+    }
+  }
+
+  function publishLocalPlayerState() {
+    if (playMode === "solo" || !networkSnapshot.connected || !running) return;
+    localStateSequence += 1;
+    network.sendPlayerState({
+      tankId: player.tankId,
+      x: player.x,
+      z: player.z,
+      altitude: player.altitude,
+      heading: player.heading,
+      turretOffset: player.turretOffset,
+      health: player.health,
+      missionPhase,
+      sequence: localStateSequence
+    });
   }
 
   function resize() {
@@ -575,6 +788,46 @@
     ctx.restore();
   }
 
+  function drawRemotePlayer(remote) {
+    if (
+      remote.missionPhase !== MISSION_PHASE.COMBAT ||
+      remote.altitude > 0.4
+    ) return;
+
+    const tank = PLAYER_TANKS[remote.tankId] ?? PLAYER_TANKS.scout;
+    const scale = remote.tankId === "bastion" ? 1.08 : 0.84;
+    const model = {
+      ...remote,
+      turretHeading: remote.heading + remote.turretOffset
+    };
+    drawMobileEnemy(
+      model,
+      { id: remote.tankId === "scout" ? "light" : "assault", scale },
+      COLORS.cyan,
+      0.92
+    );
+
+    const center = project({ x: remote.x, y: 1.05 * scale, z: remote.z });
+    if (!center || center.depth > 52) return;
+    const range = Math.round(distance(player, remote) * 10);
+    const labelY = center.y - Math.min(82, 48 / center.depth * 18);
+    ctx.save();
+    ctx.fillStyle = COLORS.cyan;
+    ctx.strokeStyle = COLORS.cyan;
+    ctx.textAlign = "center";
+    ctx.font = "9px Courier New";
+    ctx.fillText(`◆ COÉQUIPIER // ${tank.label} // ${range}m`, center.x, labelY);
+    const barWidth = Math.min(42, 220 / center.depth);
+    ctx.strokeRect(center.x - barWidth / 2, labelY + 5, barWidth, 3);
+    ctx.fillRect(
+      center.x - barWidth / 2,
+      labelY + 5,
+      barWidth * Math.max(0, Math.min(1, remote.health / 100)),
+      3
+    );
+    ctx.restore();
+  }
+
   function drawArtilleryTarget(shell) {
     const timeLeft = Math.max(0, shell.flightTime - shell.elapsed);
     const urgent = timeLeft < 0.7;
@@ -903,6 +1156,24 @@
         );
       }
     }
+
+    for (const remote of remotePlayers.values()) {
+      if (remote.missionPhase !== MISSION_PHASE.COMBAT) continue;
+      const dx = remote.x - player.x;
+      const dz = remote.z - player.z;
+      const right = dx * Math.cos(yaw) - dz * Math.sin(yaw);
+      const forward = dx * Math.sin(yaw) + dz * Math.cos(yaw);
+      const px = (right / range) * radius;
+      const py = (-forward / range) * radius;
+      const length = Math.hypot(px, py);
+      const scale = length > radius - 4 ? (radius - 4) / length : 1;
+      ctx.fillStyle = COLORS.cyan;
+      ctx.strokeStyle = COLORS.cyan;
+      ctx.beginPath();
+      ctx.arc(px * scale, py * scale, 3.2, 0, TAU);
+      ctx.stroke();
+      ctx.fillRect(px * scale - 1, py * scale - 1, 2, 2);
+    }
     ctx.restore();
 
     ctx.fillStyle = COLORS.green;
@@ -925,6 +1196,14 @@
     ctx.fillText(`VAGUE ${String(player.wave).padStart(2, "0")}`, margin, 64);
     ctx.fillStyle = COLORS.red;
     ctx.fillText(`CIBLES ${String(enemies.length).padStart(2, "0")}`, margin, 81);
+    if (playMode !== "solo" && networkSnapshot.connected) {
+      ctx.fillStyle = COLORS.cyan;
+      ctx.fillText(
+        `COOP ${networkSnapshot.playerCount}/2 // ${networkSnapshot.roomCode}`,
+        margin,
+        98
+      );
+    }
 
     const armorWidth = Math.min(180, width * 0.34);
     const armorX = margin;
@@ -1103,6 +1382,10 @@
         depth: distance(player, rock),
         draw: () => drawRock(rock)
       })),
+      ...[...remotePlayers.values()].map((remote) => ({
+        depth: distance(player, remote),
+        draw: () => drawRemotePlayer(remote)
+      })),
       ...enemies.map((enemy) => ({
         depth: distance(player, enemy),
         draw: () => drawEnemy(enemy)
@@ -1221,17 +1504,29 @@
     setTimeout(() => tone(360, 0.12, "square", 0.03), 110);
   }
 
-  function createRocks() {
+  function seededRandom(seed) {
+    let value = seed >>> 0;
+    return () => {
+      value += 0x6d2b79f5;
+      let mixed = value;
+      mixed = Math.imul(mixed ^ mixed >>> 15, mixed | 1);
+      mixed ^= mixed + Math.imul(mixed ^ mixed >>> 7, mixed | 61);
+      return ((mixed ^ mixed >>> 14) >>> 0) / 4294967296;
+    };
+  }
+
+  function createRocks(seed = Math.floor(Math.random() * 0xffffffff)) {
+    const random = seededRandom(seed);
     rocks.length = 0;
     for (let i = 0; i < 24; i += 1) {
-      const angle = Math.random() * TAU;
-      const radiusFromCenter = 12 + Math.random() * 62;
+      const angle = random() * TAU;
+      const radiusFromCenter = 12 + random() * 62;
       rocks.push({
         x: Math.sin(angle) * radiusFromCenter,
         z: Math.cos(angle) * radiusFromCenter,
-        radius: 0.8 + Math.random() * 1.9,
-        height: 1.2 + Math.random() * 3.2,
-        seed: Math.random() * TAU
+        radius: 0.8 + random() * 1.9,
+        height: 1.2 + random() * 3.2,
+        seed: random() * TAU
       });
     }
   }
@@ -1241,9 +1536,15 @@
     shells.length = 0;
     particles.length = 0;
     enemySerial = 0;
+    const coopSpawnX =
+      playMode === "solo"
+        ? 0
+        : networkSnapshot.role === "host"
+          ? -2.2
+          : 2.2;
     Object.assign(player, {
       tankId: selectedTankId,
-      x: 0,
+      x: coopSpawnX,
       altitude: DROP_SEQUENCE.START_HEIGHT,
       z: 4,
       heading: 0,
@@ -1266,9 +1567,14 @@
     missionPhase = MISSION_PHASE.DROP;
     dropElapsed = 0;
     landingPulse = 0;
+    localStateSequence = 0;
     cameraPitch = DROP_SEQUENCE.START_PITCH;
     update.nextWaveTimer = 0;
-    createRocks();
+    createRocks(
+      playMode === "solo"
+        ? Math.floor(Math.random() * 0xffffffff)
+        : Number(networkSnapshot.meta?.worldSeed) || 1
+    );
     gameOver = false;
     paused = false;
     pauseLabel.classList.add("hidden");
@@ -1290,6 +1596,10 @@
     missionPhase = MISSION_PHASE.IDLE;
     player.altitude = 0;
     cameraPitch = 0;
+    remotePlayers.clear();
+    if (playMode !== "solo" && networkSnapshot.connected) {
+      network.leaveRoom().catch(() => {});
+    }
     startScreen.classList.remove("hidden");
     document.exitPointerLock?.();
   }
@@ -1877,10 +2187,13 @@
       updateDropSequence(dt);
       updateParticles(dt);
       updateScreenEffects(dt);
+      updateRemotePlayers(dt);
+      publishLocalPlayerState();
       return;
     }
 
     updatePlayer(dt);
+    updateRemotePlayers(dt);
     updateEnemies(dt);
     updateShells(dt);
     updateParticles(dt);
@@ -1899,6 +2212,7 @@
     } else {
       update.nextWaveTimer = 0;
     }
+    publishLocalPlayerState();
   }
 
   function loop(now) {
@@ -1912,8 +2226,37 @@
   for (const card of tankCards) {
     card.addEventListener("click", () => selectPlayerTank(card.dataset.tank));
   }
+  for (const button of modeButtons) {
+    button.addEventListener("click", () => selectPlayMode(button.dataset.mode));
+  }
   selectPlayerTank(selectedTankId);
-  startButton.addEventListener("click", startGame);
+  startButton.addEventListener("click", async () => {
+    if (playMode === "solo") {
+      startGame();
+      return;
+    }
+    if (networkSnapshot.role !== "host") return;
+    try {
+      await network.startMission();
+    } catch (error) {
+      networkStatus.textContent = error.message;
+      networkStatus.classList.add("error");
+    }
+  });
+  onlineActionButton.addEventListener("click", createOrJoinRoom);
+  leaveRoomButton.addEventListener("click", async () => {
+    try {
+      await network.leaveRoom();
+    } catch {
+      // Le message détaillé vient du module réseau.
+    }
+  });
+  roomCodeInput.addEventListener("input", () => {
+    roomCodeInput.value = network.normalizeRoomCode(roomCodeInput.value);
+  });
+  roomCodeInput.addEventListener("keydown", (event) => {
+    if (event.code === "Enter") createOrJoinRoom();
+  });
   restartButton.addEventListener("click", returnToHangar);
   canvas.addEventListener("click", () => {
     if (!running || paused || gameOver) return;
@@ -1955,7 +2298,7 @@
       missionPhase === MISSION_PHASE.COMBAT
     ) recenteringTurret = true;
     if (event.code === "KeyP" && !event.repeat) togglePause();
-    if (event.code === "KeyR" && gameOver) startGame();
+    if (event.code === "KeyR" && gameOver && playMode === "solo") startGame();
   });
 
   document.addEventListener("keyup", (event) => keys.delete(event.code));
@@ -1967,5 +2310,7 @@
 
   resize();
   createRocks();
+  network?.subscribe(handleNetworkSnapshot);
+  updateLobbyUi();
   requestAnimationFrame(loop);
 })();

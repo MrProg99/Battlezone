@@ -26,12 +26,40 @@
     white: "#dcffe4",
     black: "#020504"
   };
+  const ENEMY_STATE = Object.freeze({
+    APPROACH: "approach",
+    ENGAGE: "engage",
+    RETREAT: "retreat",
+    REPOSITION: "reposition"
+  });
+  const ENEMY_AI = Object.freeze({
+    DECISION_MIN: 0.35,
+    DECISION_MAX: 0.85,
+    EMERGENCY_RANGE: 10,
+    APPROACH_MARGIN: 6,
+    RETREAT_MARGIN: 5,
+    CHASSIS_TURN_RATE: 1.05,
+    TURRET_TURN_RATE: 1.7,
+    FIRE_RANGE: 48,
+    FIRE_ALIGNMENT: 0.14
+  });
+  const MISSION_PHASE = Object.freeze({
+    IDLE: "idle",
+    DROP: "drop",
+    COMBAT: "combat"
+  });
+  const DROP_SEQUENCE = Object.freeze({
+    DURATION: 3.4,
+    START_HEIGHT: 38,
+    START_PITCH: 0.72
+  });
 
   let width = 0;
   let height = 0;
   let dpr = 1;
   let focal = 700;
   let horizon = 0;
+  let cameraPitch = 0;
   let lastTime = performance.now();
   let running = false;
   let paused = false;
@@ -44,6 +72,9 @@
   let recenteringTurret = false;
   let turretWasAligned = true;
   let alignmentPulse = 0;
+  let missionPhase = MISSION_PHASE.IDLE;
+  let dropElapsed = 0;
+  let landingPulse = 0;
   let enemySerial = 0;
   let audioContext = null;
 
@@ -55,6 +86,7 @@
 
   const player = {
     x: 0,
+    altitude: 0,
     z: 4,
     heading: 0,
     turretOffset: 0,
@@ -86,6 +118,11 @@
     return value;
   }
 
+  function turnTowardAngle(current, target, maxStep) {
+    const difference = normalizeAngle(target - current);
+    return normalizeAngle(current + Math.max(-maxStep, Math.min(maxStep, difference)));
+  }
+
   function distance(a, b) {
     return Math.hypot(a.x - b.x, a.z - b.z);
   }
@@ -94,10 +131,15 @@
     const yaw = player.heading + player.turretOffset;
     const dx = point.x - player.x;
     const dz = point.z - player.z;
+    const flatX = dx * Math.cos(yaw) - dz * Math.sin(yaw);
+    const flatZ = dx * Math.sin(yaw) + dz * Math.cos(yaw);
+    const relativeY = point.y - (1.48 + player.altitude);
+    const pitchCos = Math.cos(cameraPitch);
+    const pitchSin = Math.sin(cameraPitch);
     return {
-      x: dx * Math.cos(yaw) - dz * Math.sin(yaw),
-      y: point.y - 1.48,
-      z: dx * Math.sin(yaw) + dz * Math.cos(yaw)
+      x: flatX,
+      y: relativeY * pitchCos + flatZ * pitchSin,
+      z: -relativeY * pitchSin + flatZ * pitchCos
     };
   }
 
@@ -212,12 +254,14 @@
       );
     }
 
-    ctx.strokeStyle = "rgba(120, 255, 154, 0.14)";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(0, horizon);
-    ctx.lineTo(width, horizon);
-    ctx.stroke();
+    if (missionPhase !== MISSION_PHASE.DROP || player.altitude < 4) {
+      ctx.strokeStyle = "rgba(120, 255, 154, 0.14)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, horizon);
+      ctx.lineTo(width, horizon);
+      ctx.stroke();
+    }
   }
 
   function drawMountains() {
@@ -273,10 +317,10 @@
     drawBox(enemy, [0.95, 0.42, 1.25], enemy.heading, color, fade);
 
     const turretOrigin = orientedPoint(enemy, 0, 0, 0.08, enemy.heading);
-    drawBox(turretOrigin, [0.58, 0.75, 0.62], enemy.heading, color, fade);
+    drawBox(turretOrigin, [0.58, 0.75, 0.62], enemy.turretHeading, color, fade);
 
-    const barrelStart = orientedPoint(enemy, 0, 0.56, 0.55, enemy.heading);
-    const barrelEnd = orientedPoint(enemy, 0, 0.56, 2.05, enemy.heading);
+    const barrelStart = orientedPoint(enemy, 0, 0.56, 0.55, enemy.turretHeading);
+    const barrelEnd = orientedPoint(enemy, 0, 0.56, 2.05, enemy.turretHeading);
     line3d(barrelStart, barrelEnd, color, 2, fade);
 
     const trackLeftA = orientedPoint(enemy, -1.08, 0.12, -1.22, enemy.heading);
@@ -327,6 +371,23 @@
     const p = project(particle);
     if (!p) return;
     const alpha = Math.max(0, particle.life / particle.maxLife);
+
+    if (particle.kind === "smoke") {
+      const fadeIn = Math.min(1, (1 - alpha) * 8);
+      const radius = Math.max(2, Math.min(18, particle.size / p.depth));
+      ctx.globalAlpha = alpha * fadeIn * 0.26;
+      ctx.fillStyle = particle.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, radius, 0, TAU);
+      ctx.fill();
+      ctx.globalAlpha = alpha * fadeIn * 0.18;
+      ctx.strokeStyle = COLORS.soft;
+      ctx.lineWidth = 0.75;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      return;
+    }
+
     const radius = Math.max(0.8, Math.min(5, particle.size / p.depth));
     ctx.globalAlpha = alpha;
     ctx.fillStyle = particle.color;
@@ -582,6 +643,85 @@
     ctx.restore();
   }
 
+  function drawDropHud() {
+    const progress = Math.min(1, dropElapsed / DROP_SEQUENCE.DURATION);
+    const remaining = Math.max(0, DROP_SEQUENCE.DURATION - dropElapsed);
+    const descentSpeed =
+      (2 * DROP_SEQUENCE.START_HEIGHT * progress / DROP_SEQUENCE.DURATION) * 10;
+    const centerX = width / 2;
+
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.fillStyle = COLORS.amber;
+    ctx.font = "10px Courier New";
+    ctx.fillText("LARGAGE TACTIQUE // DESCENTE", centerX, 32);
+    ctx.fillStyle = COLORS.green;
+    ctx.font = "12px Courier New";
+    ctx.fillText(
+      `ALT ${String(Math.ceil(player.altitude * 10)).padStart(4, "0")}m   V ${String(Math.round(descentSpeed)).padStart(3, "0")}m/s`,
+      centerX,
+      52
+    );
+
+    const gaugeHeight = Math.min(260, height * 0.34);
+    const gaugeTop = height * 0.5 - gaugeHeight / 2;
+    const gaugeX = width < 600 ? 18 : 30;
+    ctx.strokeStyle = "rgba(120, 255, 154, 0.45)";
+    ctx.strokeRect(gaugeX, gaugeTop, 6, gaugeHeight);
+    ctx.fillStyle = COLORS.green;
+    ctx.fillRect(
+      gaugeX + 2,
+      gaugeTop + 2 + (gaugeHeight - 4) * progress,
+      2,
+      (gaugeHeight - 4) * (1 - progress)
+    );
+    ctx.font = "8px Courier New";
+    ctx.textAlign = "left";
+    ctx.fillText("SOL", gaugeX + 13, gaugeTop + gaugeHeight);
+
+    ctx.setLineDash([4, 6]);
+    ctx.strokeStyle = "rgba(255, 211, 106, 0.45)";
+    ctx.beginPath();
+    ctx.moveTo(centerX - 82, horizon);
+    ctx.lineTo(centerX - 34, horizon);
+    ctx.moveTo(centerX + 34, horizon);
+    ctx.lineTo(centerX + 82, horizon);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.textAlign = "center";
+    if (remaining < 0.72) {
+      const visible = Math.floor(performance.now() / 100) % 2 === 0;
+      if (visible) {
+        ctx.fillStyle = COLORS.amber;
+        ctx.font = "700 12px Courier New";
+        ctx.fillText("PRÉPAREZ L’IMPACT", centerX, height * 0.72);
+      }
+    } else {
+      ctx.fillStyle = "rgba(120, 255, 154, 0.65)";
+      ctx.font = "9px Courier New";
+      ctx.fillText(`IMPACT ${remaining.toFixed(1)}s`, centerX, height * 0.72);
+    }
+    ctx.restore();
+  }
+
+  function drawLandingImpact() {
+    if (landingPulse <= 0) return;
+    const progress = 1 - landingPulse;
+    const radius = 30 + progress * Math.min(width, height) * 0.5;
+
+    ctx.save();
+    ctx.fillStyle = `rgba(220, 255, 228, ${landingPulse * 0.1})`;
+    ctx.fillRect(0, 0, width, height);
+    ctx.globalAlpha = landingPulse * 0.8;
+    ctx.strokeStyle = COLORS.amber;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.ellipse(width / 2, horizon + height * 0.18, radius, radius * 0.24, 0, 0, TAU);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   function draw() {
     const shakeX = screenShake > 0 ? (Math.random() - 0.5) * screenShake : 0;
     const shakeY = screenShake > 0 ? (Math.random() - 0.5) * screenShake : 0;
@@ -591,7 +731,7 @@
     ctx.fillStyle = COLORS.black;
     ctx.fillRect(-20, -20, width + 40, height + 40);
 
-    drawMountains();
+    if (missionPhase !== MISSION_PHASE.DROP || player.altitude < 8) drawMountains();
     drawGround();
 
     const renderables = [
@@ -615,11 +755,16 @@
     renderables.sort((a, b) => b.depth - a.depth);
     for (const item of renderables) item.draw();
 
-    drawReticle();
     drawCockpit();
-    drawRadar();
-    drawHud();
-    drawWaveBanner();
+    if (missionPhase === MISSION_PHASE.DROP) {
+      drawDropHud();
+    } else {
+      drawReticle();
+      drawRadar();
+      drawHud();
+      drawWaveBanner();
+    }
+    drawLandingImpact();
 
     if (!pointerLocked && running && !paused && !gameOver) {
       ctx.fillStyle = "rgba(2, 8, 5, 0.72)";
@@ -659,18 +804,22 @@
         attempts += 1;
       }
       const health = player.wave >= 4 && i % 3 === 0 ? 3 : 2;
+      const initialHeading = Math.atan2(player.x - position.x, player.z - position.z);
       enemies.push({
         id: ++enemySerial,
         x: position.x,
         z: position.z,
-        heading: Math.atan2(player.x - position.x, player.z - position.z),
+        heading: initialHeading,
+        turretHeading: initialHeading,
         speed: 2.1 + Math.random() * 0.7 + player.wave * 0.08,
         health,
         maxHealth: health,
         reload: 1.2 + Math.random() * 2,
-        strafe: Math.random() < 0.5 ? -1 : 1,
-        hitFlash: 0,
-        think: Math.random()
+        preferredRange: 20 + Math.random() * 8,
+        strafeDirection: Math.random() < 0.5 ? -1 : 1,
+        state: ENEMY_STATE.APPROACH,
+        stateTimer: Math.random() * 0.4,
+        hitFlash: 0
       });
     }
     waveText = `VAGUE ${String(player.wave).padStart(2, "0")}`;
@@ -701,6 +850,7 @@
     enemySerial = 0;
     Object.assign(player, {
       x: 0,
+      altitude: DROP_SEQUENCE.START_HEIGHT,
       z: 4,
       heading: 0,
       turretOffset: 0,
@@ -715,12 +865,20 @@
     recenteringTurret = false;
     turretWasAligned = true;
     alignmentPulse = 0;
+    screenShake = 0;
+    flash = 0;
+    waveBanner = 0;
+    waveText = "";
+    missionPhase = MISSION_PHASE.DROP;
+    dropElapsed = 0;
+    landingPulse = 0;
+    cameraPitch = DROP_SEQUENCE.START_PITCH;
+    update.nextWaveTimer = 0;
     createRocks();
     gameOver = false;
     paused = false;
     pauseLabel.classList.add("hidden");
     messagePanel.classList.add("hidden");
-    spawnWave();
   }
 
   function startGame() {
@@ -796,8 +954,68 @@
     }
   }
 
+  function createMuzzleSmoke(yaw) {
+    const originX = player.x + Math.sin(yaw) * 2.05;
+    const originZ = player.z + Math.cos(yaw) * 2.05;
+
+    for (let i = 0; i < 8; i += 1) {
+      const spread = (Math.random() - 0.5) * 0.7;
+      const smokeHeading = yaw + spread;
+      const speed = 0.45 + Math.random() * 1.1;
+      const life = 0.48 + Math.random() * 0.42;
+      const lateralOffset = (Math.random() - 0.5) * 0.28;
+      particles.push({
+        kind: "smoke",
+        x: originX + Math.cos(yaw) * lateralOffset,
+        y: 0.82 + Math.random() * 0.16,
+        z: originZ - Math.sin(yaw) * lateralOffset,
+        vx: Math.sin(smokeHeading) * speed,
+        vy: 0.18 + Math.random() * 0.5,
+        vz: Math.cos(smokeHeading) * speed,
+        gravity: -0.12,
+        drag: 2.2,
+        growth: 18 + Math.random() * 14,
+        life,
+        maxLife: life,
+        size: 11 + Math.random() * 8,
+        color: i % 2 === 0 ? "#9ab89f" : "#6f8f76"
+      });
+    }
+  }
+
+  function createLandingDust() {
+    for (let i = 0; i < 30; i += 1) {
+      const angle = Math.random() * TAU;
+      const speed = 3.5 + Math.random() * 6.5;
+      const life = 0.65 + Math.random() * 0.55;
+      const startRadius = 1.2 + Math.random() * 1.2;
+      particles.push({
+        kind: "smoke",
+        x: player.x + Math.sin(angle) * startRadius,
+        y: 0.12 + Math.random() * 0.25,
+        z: player.z + Math.cos(angle) * startRadius,
+        vx: Math.sin(angle) * speed,
+        vy: 0.4 + Math.random() * 1.2,
+        vz: Math.cos(angle) * speed,
+        gravity: 0.7,
+        drag: 1.35,
+        growth: 22 + Math.random() * 18,
+        life,
+        maxLife: life,
+        size: 13 + Math.random() * 12,
+        color: i % 2 === 0 ? "#98aa8b" : "#63765f"
+      });
+    }
+  }
+
   function firePlayer() {
-    if (!running || paused || gameOver || player.reload > 0) return;
+    if (
+      !running ||
+      paused ||
+      gameOver ||
+      missionPhase !== MISSION_PHASE.COMBAT ||
+      player.reload > 0
+    ) return;
     const yaw = player.heading + player.turretOffset;
     shells.push({
       x: player.x + Math.sin(yaw) * 1.8,
@@ -808,6 +1026,7 @@
       life: 2.25,
       owner: "player"
     });
+    createMuzzleSmoke(yaw);
     player.reload = 0.72;
     screenShake = 5;
     tone(74, 0.12, "sawtooth", 0.07, -28);
@@ -815,9 +1034,8 @@
   }
 
   function fireEnemy(enemy) {
-    const yaw = Math.atan2(player.x - enemy.x, player.z - enemy.z);
     const accuracy = Math.min(0.18, 0.08 + distance(player, enemy) * 0.0015);
-    const shotYaw = yaw + (Math.random() - 0.5) * accuracy;
+    const shotYaw = enemy.turretHeading + (Math.random() - 0.5) * accuracy;
     shells.push({
       x: enemy.x + Math.sin(shotYaw) * 1.7,
       y: 0.72,
@@ -886,53 +1104,113 @@
     alignmentPulse = Math.max(0, alignmentPulse - dt);
   }
 
+  function chooseEnemyState(enemy, range) {
+    if (range > enemy.preferredRange + ENEMY_AI.APPROACH_MARGIN) {
+      enemy.state = ENEMY_STATE.APPROACH;
+    } else if (range < enemy.preferredRange - ENEMY_AI.RETREAT_MARGIN) {
+      enemy.state = ENEMY_STATE.RETREAT;
+    } else {
+      enemy.state = ENEMY_STATE.ENGAGE;
+      if (Math.random() < 0.22) enemy.strafeDirection *= -1;
+    }
+
+    enemy.stateTimer =
+      ENEMY_AI.DECISION_MIN +
+      Math.random() * (ENEMY_AI.DECISION_MAX - ENEMY_AI.DECISION_MIN);
+  }
+
+  function getEnemyMovementPlan(enemy, targetHeading) {
+    switch (enemy.state) {
+      case ENEMY_STATE.RETREAT:
+        return {
+          heading: targetHeading + Math.PI + enemy.strafeDirection * 0.22,
+          speedScale: 0.86
+        };
+      case ENEMY_STATE.ENGAGE:
+        return {
+          heading: targetHeading + enemy.strafeDirection * 1.24,
+          speedScale: 0.72
+        };
+      case ENEMY_STATE.REPOSITION:
+        return {
+          heading: targetHeading + enemy.strafeDirection * 1.75,
+          speedScale: 0.92
+        };
+      case ENEMY_STATE.APPROACH:
+      default:
+        return {
+          heading: targetHeading + enemy.strafeDirection * 0.18,
+          speedScale: 1
+        };
+    }
+  }
+
+  function updateEnemyMovement(enemy, targetHeading, range, dt) {
+    enemy.stateTimer -= dt;
+    if (range < ENEMY_AI.EMERGENCY_RANGE && enemy.state !== ENEMY_STATE.RETREAT) {
+      enemy.state = ENEMY_STATE.RETREAT;
+      enemy.stateTimer = 0.6;
+    } else if (enemy.stateTimer <= 0) {
+      chooseEnemyState(enemy, range);
+    }
+
+    const plan = getEnemyMovementPlan(enemy, targetHeading);
+    enemy.heading = turnTowardAngle(
+      enemy.heading,
+      plan.heading,
+      ENEMY_AI.CHASSIS_TURN_RATE * dt
+    );
+
+    const moveSpeed = enemy.speed * plan.speedScale;
+    const nextX = enemy.x + Math.sin(enemy.heading) * moveSpeed * dt;
+    const nextZ = enemy.z + Math.cos(enemy.heading) * moveSpeed * dt;
+    const hitsRock = circleCollision(nextX, nextZ, 1.12);
+    const hitsEnemy = enemies.some((other) =>
+      other !== enemy && Math.hypot(nextX - other.x, nextZ - other.z) < 2.25
+    );
+    const staysInWorld =
+      Math.abs(nextX) < WORLD_LIMIT - 1 &&
+      Math.abs(nextZ) < WORLD_LIMIT - 1;
+
+    if (!hitsRock && !hitsEnemy && staysInWorld) {
+      enemy.x = nextX;
+      enemy.z = nextZ;
+      return;
+    }
+
+    if (enemy.state !== ENEMY_STATE.REPOSITION) enemy.strafeDirection *= -1;
+    enemy.state = ENEMY_STATE.REPOSITION;
+    enemy.stateTimer = 0.7 + Math.random() * 0.35;
+    enemy.heading = normalizeAngle(enemy.heading + enemy.strafeDirection * 0.32);
+  }
+
+  function updateEnemyTurret(enemy, targetHeading, range, dt) {
+    enemy.turretHeading = turnTowardAngle(
+      enemy.turretHeading,
+      targetHeading,
+      ENEMY_AI.TURRET_TURN_RATE * dt
+    );
+    enemy.reload -= dt;
+
+    if (enemy.reload > 0 || range >= ENEMY_AI.FIRE_RANGE) return;
+
+    const facingError = Math.abs(normalizeAngle(targetHeading - enemy.turretHeading));
+    if (facingError <= ENEMY_AI.FIRE_ALIGNMENT) {
+      fireEnemy(enemy);
+      enemy.reload = Math.max(1.25, 2.8 - player.wave * 0.08) + Math.random() * 1.4;
+    }
+  }
+
   function updateEnemies(dt) {
-    for (let i = enemies.length - 1; i >= 0; i -= 1) {
-      const enemy = enemies[i];
+    for (const enemy of enemies) {
       const dx = player.x - enemy.x;
       const dz = player.z - enemy.z;
       const range = Math.hypot(dx, dz);
       const targetHeading = Math.atan2(dx, dz);
-      enemy.think -= dt;
+
       enemy.hitFlash = Math.max(0, enemy.hitFlash - dt);
-      enemy.reload -= dt;
-
-      if (enemy.think <= 0) {
-        if (Math.random() < 0.3) enemy.strafe *= -1;
-        enemy.think = 0.7 + Math.random() * 1.4;
-      }
-
-      let desired = targetHeading;
-      if (range < 14) desired += Math.PI;
-      else if (range < 28) desired += enemy.strafe * 0.7;
-      else desired += enemy.strafe * 0.15;
-
-      const turnDifference = normalizeAngle(desired - enemy.heading);
-      enemy.heading = normalizeAngle(enemy.heading + Math.max(-1, Math.min(1, turnDifference)) * dt * 0.85);
-
-      const moveSpeed = range > 13 ? enemy.speed : enemy.speed * 0.55;
-      const nextX = enemy.x + Math.sin(enemy.heading) * moveSpeed * dt;
-      const nextZ = enemy.z + Math.cos(enemy.heading) * moveSpeed * dt;
-      const hitsRock = circleCollision(nextX, nextZ, 1.12);
-      const hitsEnemy = enemies.some((other) =>
-        other !== enemy && Math.hypot(nextX - other.x, nextZ - other.z) < 2.25
-      );
-      if (!hitsRock && !hitsEnemy && Math.abs(nextX) < WORLD_LIMIT && Math.abs(nextZ) < WORLD_LIMIT) {
-        enemy.x = nextX;
-        enemy.z = nextZ;
-      } else {
-        enemy.heading = normalizeAngle(enemy.heading + enemy.strafe * 1.3 * dt);
-      }
-
-      enemy.heading = normalizeAngle(enemy.heading);
-
-      if (enemy.reload <= 0 && range < 48) {
-        const facingError = Math.abs(normalizeAngle(targetHeading - enemy.heading));
-        if (facingError < 0.85) {
-          fireEnemy(enemy);
-          enemy.reload = Math.max(1.25, 2.8 - player.wave * 0.08) + Math.random() * 1.4;
-        }
-      }
+      updateEnemyMovement(enemy, targetHeading, range, dt);
+      updateEnemyTurret(enemy, targetHeading, range, dt);
     }
   }
 
@@ -993,9 +1271,14 @@
       particle.x += particle.vx * dt;
       particle.y += particle.vy * dt;
       particle.z += particle.vz * dt;
-      particle.vy -= 8.5 * dt;
+      particle.vy -= (particle.gravity ?? 8.5) * dt;
+      const damping = Math.exp(-(particle.drag ?? 0) * dt);
+      particle.vx *= damping;
+      particle.vy *= damping;
+      particle.vz *= damping;
+      particle.size += (particle.growth ?? 0) * dt;
       particle.life -= dt;
-      if (particle.y < 0) {
+      if (particle.kind !== "smoke" && particle.y < 0) {
         particle.y = 0;
         particle.vy *= -0.25;
         particle.vx *= 0.72;
@@ -1005,13 +1288,50 @@
     }
   }
 
+  function finishDropSequence() {
+    player.altitude = 0;
+    cameraPitch = 0;
+    missionPhase = MISSION_PHASE.COMBAT;
+    landingPulse = 1;
+    screenShake = 24;
+    createLandingDust();
+    tone(48, 0.42, "sawtooth", 0.1, -16);
+    tone(130, 0.16, "square", 0.045, -70);
+    spawnWave();
+  }
+
+  function updateDropSequence(dt) {
+    dropElapsed = Math.min(DROP_SEQUENCE.DURATION, dropElapsed + dt);
+    const progress = dropElapsed / DROP_SEQUENCE.DURATION;
+    player.altitude = DROP_SEQUENCE.START_HEIGHT * (1 - progress * progress);
+
+    const leveling = Math.max(0, Math.min(1, (progress - 0.56) / 0.44));
+    const smoothLeveling = leveling * leveling * (3 - 2 * leveling);
+    cameraPitch = DROP_SEQUENCE.START_PITCH * (1 - smoothLeveling);
+    screenShake = Math.max(screenShake, 0.4 + progress * 1.8);
+
+    if (progress >= 1) finishDropSequence();
+  }
+
+  function updateScreenEffects(dt) {
+    screenShake = Math.max(0, screenShake - dt * 24);
+    flash = Math.max(0, flash - dt * 3.8);
+    landingPulse = Math.max(0, landingPulse - dt * 1.65);
+  }
+
   function update(dt) {
+    if (missionPhase === MISSION_PHASE.DROP) {
+      updateDropSequence(dt);
+      updateParticles(dt);
+      updateScreenEffects(dt);
+      return;
+    }
+
     updatePlayer(dt);
     updateEnemies(dt);
     updateShells(dt);
     updateParticles(dt);
-    screenShake = Math.max(0, screenShake - dt * 24);
-    flash = Math.max(0, flash - dt * 3.8);
+    updateScreenEffects(dt);
     waveBanner = Math.max(0, waveBanner - dt);
 
     if (enemies.length === 0 && !gameOver) {
@@ -1050,7 +1370,12 @@
   });
 
   document.addEventListener("mousemove", (event) => {
-    if (!pointerLocked || paused || gameOver) return;
+    if (
+      !pointerLocked ||
+      paused ||
+      gameOver ||
+      missionPhase !== MISSION_PHASE.COMBAT
+    ) return;
     recenteringTurret = false;
     player.turretOffset = normalizeAngle(player.turretOffset + event.movementX * 0.0025);
   });
@@ -1065,7 +1390,13 @@
       event.preventDefault();
     }
     if (event.code === "Space") firePlayer();
-    if (event.code === "KeyC" && running && !paused && !gameOver) recenteringTurret = true;
+    if (
+      event.code === "KeyC" &&
+      running &&
+      !paused &&
+      !gameOver &&
+      missionPhase === MISSION_PHASE.COMBAT
+    ) recenteringTurret = true;
     if (event.code === "KeyP" && !event.repeat) togglePause();
     if (event.code === "KeyR" && gameOver) startGame();
   });

@@ -29,7 +29,8 @@ Puis ouvrir `http://localhost:8000`.
 ## Contenu du prototype
 
 - Vue cockpit en perspective 3D
+- Largage aérien du tank avec altimètre et impact au sol
 - Conduite et tourelle indépendantes
-- Tanks ennemis avec poursuite, évitement et tir
+- Tanks ennemis avec états tactiques, distance de combat et tourelle indépendante
 - Vagues progressives, score, blindage et radar
 - Effets sonores synthétisés et esthétique d’écran CRT

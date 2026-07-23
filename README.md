@@ -64,10 +64,14 @@ Ce premier jalon synchronise :
 - le type, la position, l’orientation, la tourelle et le blindage des deux chars;
 - le départ de mission déclenché par l’hôte;
 - la disposition des rochers grâce à une graine de monde commune.
+- les vagues, les ennemis, leurs tourelles et leurs obus;
+- les tirs des deux joueurs et les dégâts infligés aux mêmes cibles;
+- le score, les éliminations et le blindage partagé;
+- la fin de mission commune si l’un des deux chars est détruit.
 
-Les ennemis, les obus et le score sont encore simulés séparément sur chaque
-ordinateur. Le prochain jalon donnera l’autorité des ennemis et des vagues à
-l’hôte, puis répliquera leurs états aux deux joueurs.
+L’hôte est l’unique autorité de la simulation de combat. L’invité contrôle son
+char localement pour conserver une conduite fluide, transmet ses tirs, puis
+interpole le monde partagé reçu depuis `battlezone/rooms/<code>/world`.
 
 ## Commandes
 

@@ -4,6 +4,7 @@
   const FIREBASE_VERSION = "12.16.0";
   const MAX_PLAYERS = 2;
   const SEND_INTERVAL = 90;
+  const WORLD_SEND_INTERVAL = 100;
   const ROOMS_PATH = "battlezone/rooms";
   const ROOM_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   const subscribers = new Set();
@@ -19,6 +20,9 @@
   let lastSendAt = 0;
   let pendingState = null;
   let sendTimer = 0;
+  let lastWorldSendAt = 0;
+  let pendingWorldState = null;
+  let worldSendTimer = 0;
 
   const session = {
     configured: hasFirebaseConfig(),
@@ -28,6 +32,7 @@
     uid: "",
     meta: null,
     players: {},
+    world: null,
     error: ""
   };
 
@@ -47,6 +52,7 @@
       ...session,
       meta: session.meta ? { ...session.meta } : null,
       players: { ...session.players },
+      world: session.world ? { ...session.world } : null,
       playerCount: Object.keys(session.players).length,
       connected: Boolean(session.roomCode && session.uid)
     };
@@ -186,6 +192,13 @@
       })
     );
 
+    roomUnsubscribes.push(
+      onValue(ref(database, `${roomPath}/world`), (snapshot) => {
+        session.world = snapshot.val();
+        emit();
+      })
+    );
+
     presenceUnsubscribe = onValue(
       ref(database, ".info/connected"),
       async (snapshot) => {
@@ -242,7 +255,7 @@
           hostId: session.uid,
           status: "lobby",
           maxPlayers: MAX_PLAYERS,
-          version: 1,
+          version: 2,
           worldSeed: makeWorldSeed(),
           createdAt: Date.now()
         },
@@ -280,6 +293,9 @@
     if (!room?.meta) throw new Error("Salon introuvable.");
     if (room.meta.status !== "lobby") {
       throw new Error("La mission de ce salon a déjà commencé.");
+    }
+    if (room.meta.version !== 2) {
+      throw new Error("Ce salon utilise une autre version de Battlezone.");
     }
     const existingGuest = room.players?.guest;
     if (existingGuest?.uid && existingGuest.uid !== session.uid) {
@@ -344,11 +360,52 @@
       health: Math.max(0, Math.min(100, Math.round(state.health))),
       missionPhase: state.missionPhase,
       sequence: state.sequence,
+      shotSequence: state.shotSequence,
+      shotX: Number(state.shotX.toFixed(3)),
+      shotZ: Number(state.shotZ.toFixed(3)),
+      shotYaw: Number(state.shotYaw.toFixed(4)),
+      shotTankId: state.shotTankId === "bastion" ? "bastion" : "scout",
       updatedAt: Date.now()
     };
 
     const wait = Math.max(0, SEND_INTERVAL - (performance.now() - lastSendAt));
     if (!sendTimer) sendTimer = window.setTimeout(flushPlayerState, wait);
+  }
+
+  async function flushWorldState() {
+    worldSendTimer = 0;
+    if (
+      !pendingWorldState ||
+      !firebase ||
+      !session.roomCode ||
+      session.role !== "host"
+    ) return;
+    const nextWorld = pendingWorldState;
+    pendingWorldState = null;
+    lastWorldSendAt = performance.now();
+    const { ref, set } = firebase.databaseModule;
+    try {
+      await set(ref(database, `${ROOMS_PATH}/${session.roomCode}/world`), nextWorld);
+    } catch (error) {
+      session.error = readableError(error);
+      emit();
+    }
+  }
+
+  function sendWorldState(world) {
+    if (
+      session.role !== "host" ||
+      !session.roomCode ||
+      session.meta?.status !== "playing"
+    ) return;
+    pendingWorldState = world;
+    const wait = Math.max(
+      0,
+      WORLD_SEND_INTERVAL - (performance.now() - lastWorldSendAt)
+    );
+    if (!worldSendTimer) {
+      worldSendTimer = window.setTimeout(flushWorldState, wait);
+    }
   }
 
   async function leaveRoom() {
@@ -368,6 +425,7 @@
     session.role = "";
     session.meta = null;
     session.players = {};
+    session.world = null;
     session.phase = "idle";
     session.error = "";
     emit();
@@ -410,6 +468,7 @@
     startMission,
     setTank,
     sendPlayerState,
+    sendWorldState,
     leaveRoom,
     subscribe,
     getState: publicState,

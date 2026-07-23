@@ -186,6 +186,7 @@
   let dropElapsed = 0;
   let landingPulse = 0;
   let enemySerial = 0;
+  let shellSerial = 0;
   let audioContext = null;
   let selectedTankId = "scout";
   let playMode = "solo";
@@ -196,6 +197,16 @@
     playerCount: 0
   };
   let localStateSequence = 0;
+  let localShotSequence = 0;
+  let sharedWorldSequence = 0;
+  let appliedWorldSequence = -1;
+  let sharedGameOver = false;
+  let lastLocalShot = {
+    x: 0,
+    z: 4,
+    yaw: 0,
+    tankId: "scout"
+  };
 
   const keys = new Set();
   const enemies = [];
@@ -203,6 +214,15 @@
   const particles = [];
   const rocks = [];
   const remotePlayers = new Map();
+  const remoteWorldShells = [];
+  const coopHealth = {
+    host: 100,
+    guest: 100
+  };
+  const coopInvulnerability = {
+    host: 0,
+    guest: 0
+  };
 
   const player = {
     tankId: selectedTankId,
@@ -226,6 +246,14 @@
 
   function getEnemyType(enemy) {
     return ENEMY_TYPES[enemy.typeId] ?? ENEMY_TYPES.assault;
+  }
+
+  function isCoopGame() {
+    return playMode !== "solo" && networkSnapshot.connected;
+  }
+
+  function isWorldAuthority() {
+    return !isCoopGame() || networkSnapshot.role === "host";
   }
 
   function selectPlayerTank(tankId) {
@@ -339,6 +367,7 @@
       seen.add(uid);
       const target = {
         uid,
+        role: record.role ?? slot,
         tankId: state.tankId === "bastion" ? "bastion" : "scout",
         x: Number(state.x) || 0,
         z: Number(state.z) || 0,
@@ -346,13 +375,33 @@
         heading: Number(state.heading) || 0,
         turretOffset: Number(state.turretOffset) || 0,
         health: Number.isFinite(Number(state.health)) ? Number(state.health) : 100,
-        missionPhase: state.missionPhase ?? MISSION_PHASE.IDLE
+        missionPhase: state.missionPhase ?? MISSION_PHASE.IDLE,
+        shotSequence: Number(state.shotSequence) || 0,
+        shotX: Number(state.shotX) || Number(state.x) || 0,
+        shotZ: Number(state.shotZ) || Number(state.z) || 0,
+        shotYaw: Number(state.shotYaw) || 0,
+        shotTankId: state.shotTankId === "bastion" ? "bastion" : "scout"
       };
       const remote = remotePlayers.get(uid);
       if (remote) {
+        if (
+          isWorldAuthority() &&
+          target.role === "guest" &&
+          target.shotSequence > (remote.lastShotSequence ?? 0)
+        ) {
+          spawnRemotePlayerShot(target);
+        }
+        remote.lastShotSequence = Math.max(
+          remote.lastShotSequence ?? 0,
+          target.shotSequence
+        );
         remote.target = target;
       } else {
-        remotePlayers.set(uid, { ...target, target });
+        remotePlayers.set(uid, {
+          ...target,
+          target,
+          lastShotSequence: target.shotSequence
+        });
       }
     }
 
@@ -365,6 +414,9 @@
     const previousStatus = networkSnapshot.meta?.status;
     networkSnapshot = snapshot;
     reconcileRemotePlayers(snapshot);
+    if (snapshot.role === "guest" && snapshot.world) {
+      applySharedWorld(snapshot.world);
+    }
     updateLobbyUi();
 
     if (
@@ -408,6 +460,7 @@
         normalizeAngle(remote.target.turretOffset - remote.turretOffset) * blend
       );
       remote.health += (remote.target.health - remote.health) * blend;
+      remote.role = remote.target.role;
       remote.tankId = remote.target.tankId;
       remote.missionPhase = remote.target.missionPhase;
     }
@@ -425,8 +478,227 @@
       turretOffset: player.turretOffset,
       health: player.health,
       missionPhase,
-      sequence: localStateSequence
+      sequence: localStateSequence,
+      shotSequence: localShotSequence,
+      shotX: lastLocalShot.x,
+      shotZ: lastLocalShot.z,
+      shotYaw: lastLocalShot.yaw,
+      shotTankId: lastLocalShot.tankId
     });
+  }
+
+  function firebaseValues(collection) {
+    if (!collection) return [];
+    return Array.isArray(collection)
+      ? collection.filter(Boolean)
+      : Object.values(collection);
+  }
+
+  function applySharedWorld(world) {
+    const sequence = Number(world.sequence) || 0;
+    if (sequence <= appliedWorldSequence) return;
+    appliedWorldSequence = sequence;
+
+    const previousWave = player.wave;
+    const previousHealth = player.health;
+    player.wave = Number(world.wave) || 0;
+    player.score = Number(world.score) || 0;
+    player.kills = Number(world.kills) || 0;
+    coopHealth.host = Number(world.health?.host ?? coopHealth.host);
+    coopHealth.guest = Number(world.health?.guest ?? coopHealth.guest);
+    player.health = Math.max(0, Math.min(100, coopHealth.guest));
+    sharedGameOver = Boolean(world.gameOver);
+
+    if (player.health < previousHealth) {
+      flash = 1;
+      screenShake = Math.max(screenShake, 12);
+      tone(92, 0.25, "sawtooth", 0.08, -45);
+    }
+
+    if (player.wave > previousWave && player.wave > 0) {
+      waveText = `VAGUE ${String(player.wave).padStart(2, "0")}`;
+      waveBanner = 2.8;
+      tone(240, 0.08, "square", 0.035);
+    }
+
+    const incomingEnemies = firebaseValues(world.enemies);
+    const incomingEnemyIds = new Set(incomingEnemies.map((enemy) => Number(enemy.id)));
+    for (let i = enemies.length - 1; i >= 0; i -= 1) {
+      if (!incomingEnemyIds.has(Number(enemies[i].id))) {
+        if (missionPhase === MISSION_PHASE.COMBAT) {
+          burst(enemies[i].x, enemies[i].z, COLORS.red, 24);
+        }
+        enemies.splice(i, 1);
+      }
+    }
+
+    for (const snapshot of incomingEnemies) {
+      const id = Number(snapshot.id);
+      let enemy = enemies.find((candidate) => Number(candidate.id) === id);
+      const target = {
+        id,
+        typeId: snapshot.typeId,
+        x: Number(snapshot.x),
+        z: Number(snapshot.z),
+        heading: Number(snapshot.heading),
+        turretHeading: Number(snapshot.turretHeading),
+        health: Number(snapshot.health),
+        maxHealth: Number(snapshot.maxHealth),
+        hitFlash: Number(snapshot.hitFlash) || 0
+      };
+      if (!enemy) {
+        enemy = { ...target, networkTarget: target };
+        enemies.push(enemy);
+      } else {
+        if (target.health < enemy.health) enemy.hitFlash = 0.14;
+        enemy.networkTarget = target;
+      }
+    }
+
+    const incomingShells = firebaseValues(world.shells);
+    const incomingShellIds = new Set(incomingShells.map((shell) => Number(shell.id)));
+    for (let i = remoteWorldShells.length - 1; i >= 0; i -= 1) {
+      const shell = remoteWorldShells[i];
+      if (incomingShellIds.has(Number(shell.id))) continue;
+      if (shell.kind === "artillery" && shell.life < 0.45) {
+        burst(shell.targetX, shell.targetZ, COLORS.red, 28);
+        burst(shell.targetX, shell.targetZ, COLORS.amber, 14);
+        createBlastSmoke(shell.targetX, shell.targetZ);
+        const blastDistance = Math.hypot(
+          shell.targetX - player.x,
+          shell.targetZ - player.z
+        );
+        screenShake = Math.max(screenShake, Math.max(2, 13 - blastDistance * 0.18));
+        tone(44, 0.48, "sawtooth", 0.095, -12);
+      }
+      remoteWorldShells.splice(i, 1);
+    }
+
+    for (const snapshot of incomingShells) {
+      const id = Number(snapshot.id);
+      let shell = remoteWorldShells.find((candidate) => Number(candidate.id) === id);
+      const target = {
+        ...snapshot,
+        id,
+        x: Number(snapshot.x),
+        y: Number(snapshot.y),
+        z: Number(snapshot.z),
+        vx: Number(snapshot.vx) || 0,
+        vz: Number(snapshot.vz) || 0,
+        life: Number(snapshot.life) || 0,
+        trail: []
+      };
+      if (!shell) {
+        shell = { ...target, networkTarget: target };
+        remoteWorldShells.push(shell);
+      } else {
+        shell.networkTarget = target;
+      }
+    }
+
+    if (sharedGameOver && !gameOver) endGame();
+  }
+
+  function updateReplicatedWorld(dt) {
+    if (!isCoopGame() || networkSnapshot.role !== "guest") return;
+    const blend = 1 - Math.exp(-dt * 14);
+    for (const enemy of enemies) {
+      if (!enemy.networkTarget) continue;
+      const target = enemy.networkTarget;
+      enemy.x += (target.x - enemy.x) * blend;
+      enemy.z += (target.z - enemy.z) * blend;
+      enemy.heading = normalizeAngle(
+        enemy.heading + normalizeAngle(target.heading - enemy.heading) * blend
+      );
+      enemy.turretHeading = normalizeAngle(
+        enemy.turretHeading +
+        normalizeAngle(target.turretHeading - enemy.turretHeading) * blend
+      );
+      enemy.health = target.health;
+      enemy.maxHealth = target.maxHealth;
+      enemy.hitFlash = Math.max(0, enemy.hitFlash - dt);
+    }
+    for (const shell of remoteWorldShells) {
+      const target = shell.networkTarget;
+      if (!target) continue;
+      shell.x += (target.x - shell.x) * blend;
+      shell.y += (target.y - shell.y) * blend;
+      shell.z += (target.z - shell.z) * blend;
+      shell.life = target.life;
+      Object.assign(shell, {
+        targetX: target.targetX,
+        targetZ: target.targetZ,
+        flightTime: target.flightTime,
+        elapsed: target.elapsed,
+        blastRadius: target.blastRadius,
+        blastDamage: target.blastDamage
+      });
+    }
+  }
+
+  function buildSharedWorld() {
+    coopHealth.host = player.health;
+    const enemyStates = {};
+    for (const enemy of enemies) {
+      enemyStates[`e${enemy.id}`] = {
+        id: enemy.id,
+        typeId: enemy.typeId,
+        x: Number(enemy.x.toFixed(3)),
+        z: Number(enemy.z.toFixed(3)),
+        heading: Number(enemy.heading.toFixed(4)),
+        turretHeading: Number(enemy.turretHeading.toFixed(4)),
+        health: enemy.health,
+        maxHealth: enemy.maxHealth,
+        hitFlash: Number(enemy.hitFlash.toFixed(3))
+      };
+    }
+
+    const shellStates = {};
+    for (const shell of shells) {
+      if (shell.owner === "ally") continue;
+      const state = {
+        id: shell.id,
+        kind: shell.kind,
+        owner: shell.owner,
+        x: Number(shell.x.toFixed(3)),
+        y: Number(shell.y.toFixed(3)),
+        z: Number(shell.z.toFixed(3)),
+        vx: Number((shell.vx ?? 0).toFixed(3)),
+        vz: Number((shell.vz ?? 0).toFixed(3)),
+        life: Number(shell.life.toFixed(3))
+      };
+      if (shell.kind === "artillery") {
+        Object.assign(state, {
+          targetX: Number(shell.targetX.toFixed(3)),
+          targetZ: Number(shell.targetZ.toFixed(3)),
+          flightTime: Number(shell.flightTime.toFixed(3)),
+          elapsed: Number(shell.elapsed.toFixed(3)),
+          blastRadius: shell.blastRadius,
+          blastDamage: shell.blastDamage
+        });
+      }
+      shellStates[`s${shell.id}`] = state;
+    }
+
+    return {
+      sequence: ++sharedWorldSequence,
+      wave: player.wave,
+      score: player.score,
+      kills: player.kills,
+      health: {
+        host: Math.round(coopHealth.host),
+        guest: Math.round(coopHealth.guest)
+      },
+      gameOver: sharedGameOver,
+      enemies: enemyStates,
+      shells: shellStates,
+      updatedAt: Date.now()
+    };
+  }
+
+  function publishSharedWorld() {
+    if (!isCoopGame() || networkSnapshot.role !== "host") return;
+    network.sendWorldState(buildSharedWorld());
   }
 
   function resize() {
@@ -893,7 +1165,7 @@
       Math.min(artillery ? 10 : 7, (artillery ? 26 : 18) / p.depth)
     );
     const color =
-      shell.owner === "player" || artillery ? COLORS.amber : COLORS.red;
+      shell.owner !== "enemy" || artillery ? COLORS.amber : COLORS.red;
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
     ctx.fillStyle = color;
@@ -905,13 +1177,14 @@
     ctx.restore();
 
     if (artillery) {
-      for (let i = 1; i < shell.trail.length; i += 1) {
+      const trail = shell.trail ?? [];
+      for (let i = 1; i < trail.length; i += 1) {
         line3d(
-          shell.trail[i - 1],
-          shell.trail[i],
+          trail[i - 1],
+          trail[i],
           COLORS.amber,
           1.2,
-          i / shell.trail.length * 0.6
+          i / trail.length * 0.6
         );
       }
       return;
@@ -1234,7 +1507,7 @@
 
   function drawIncomingArtilleryWarning() {
     let incoming = null;
-    for (const shell of shells) {
+    for (const shell of [...shells, ...remoteWorldShells]) {
       if (shell.kind !== "artillery") continue;
       const dangerDistance = Math.hypot(
         shell.targetX - player.x,
@@ -1394,6 +1667,10 @@
         depth: distance(player, shell),
         draw: () => drawShell(shell)
       })),
+      ...remoteWorldShells.map((shell) => ({
+        depth: distance(player, shell),
+        draw: () => drawShell(shell)
+      })),
       ...particles.map((particle) => ({
         depth: distance(player, particle),
         draw: () => drawParticle(particle)
@@ -1483,6 +1760,63 @@
     };
   }
 
+  function isEnemySpawnClear(position, type) {
+    const radius = 1.25 * type.scale;
+    const hitsRock = rocks.some((rock) =>
+      distance(position, rock) < radius + rock.radius + 1.5
+    );
+    if (hitsRock) return false;
+
+    return enemies.every((enemy) => {
+      const otherRadius = 1.25 * getEnemyType(enemy).scale;
+      return distance(position, enemy) >= radius + otherRadius + 2.2;
+    });
+  }
+
+  function findEnemySpawn(type, minimumRange, maximumRange, index) {
+    for (let attempt = 0; attempt < 36; attempt += 1) {
+      const position = randomSpawn(minimumRange, maximumRange);
+      if (isEnemySpawnClear(position, type)) return position;
+    }
+
+    const slices = 24;
+    const rings = 4;
+    for (let ring = 0; ring < rings; ring += 1) {
+      const range =
+        minimumRange +
+        (maximumRange - minimumRange) * ((ring + 0.5) / rings);
+      for (let slice = 0; slice < slices; slice += 1) {
+        const angle =
+          (slice / slices) * TAU +
+          index * 0.73 +
+          player.wave * 0.31;
+        const position = {
+          x: Math.max(
+            -WORLD_LIMIT + 5,
+            Math.min(WORLD_LIMIT - 5, player.x + Math.sin(angle) * range)
+          ),
+          z: Math.max(
+            -WORLD_LIMIT + 5,
+            Math.min(WORLD_LIMIT - 5, player.z + Math.cos(angle) * range)
+          )
+        };
+        if (isEnemySpawnClear(position, type)) return position;
+      }
+    }
+
+    const fallbackAngle = index / Math.max(1, enemies.length + 1) * TAU;
+    return {
+      x: Math.max(
+        -WORLD_LIMIT + 5,
+        Math.min(WORLD_LIMIT - 5, player.x + Math.sin(fallbackAngle) * maximumRange)
+      ),
+      z: Math.max(
+        -WORLD_LIMIT + 5,
+        Math.min(WORLD_LIMIT - 5, player.z + Math.cos(fallbackAngle) * maximumRange)
+      )
+    };
+  }
+
   function spawnWave() {
     player.wave += 1;
     const count = Math.min(3 + player.wave, 9);
@@ -1490,12 +1824,7 @@
       const type = getWaveEnemyType(i, count);
       const minimumRange = type.id === "artillery" ? 44 : 30;
       const maximumRange = type.id === "artillery" ? 66 : 58;
-      let position = randomSpawn(minimumRange, maximumRange);
-      let attempts = 0;
-      while (rocks.some((rock) => distance(position, rock) < rock.radius + 3) && attempts < 12) {
-        position = randomSpawn(minimumRange, maximumRange);
-        attempts += 1;
-      }
+      const position = findEnemySpawn(type, minimumRange, maximumRange, i);
       enemies.push(createEnemy(type, position));
     }
     waveText = `VAGUE ${String(player.wave).padStart(2, "0")}`;
@@ -1534,8 +1863,10 @@
   function resetGame() {
     enemies.length = 0;
     shells.length = 0;
+    remoteWorldShells.length = 0;
     particles.length = 0;
     enemySerial = 0;
+    shellSerial = 0;
     const coopSpawnX =
       playMode === "solo"
         ? 0
@@ -1568,6 +1899,20 @@
     dropElapsed = 0;
     landingPulse = 0;
     localStateSequence = 0;
+    localShotSequence = 0;
+    sharedWorldSequence = 0;
+    appliedWorldSequence = -1;
+    sharedGameOver = false;
+    coopHealth.host = 100;
+    coopHealth.guest = 100;
+    coopInvulnerability.host = 0;
+    coopInvulnerability.guest = 0;
+    lastLocalShot = {
+      x: coopSpawnX,
+      z: 4,
+      yaw: 0,
+      tankId: selectedTankId
+    };
     cameraPitch = DROP_SEQUENCE.START_PITCH;
     update.nextWaveTimer = 0;
     createRocks(
@@ -1757,6 +2102,7 @@
     const tank = getPlayerTank();
     const yaw = player.heading + player.turretOffset;
     shells.push({
+      id: ++shellSerial,
       kind: "direct",
       x: player.x + Math.sin(yaw) * 1.8,
       y: 0.86,
@@ -1766,6 +2112,13 @@
       life: tank.shellLifetime,
       owner: "player"
     });
+    localShotSequence += 1;
+    lastLocalShot = {
+      x: player.x,
+      z: player.z,
+      yaw,
+      tankId: player.tankId
+    };
     createMuzzleSmoke(yaw);
     player.reload = tank.reloadTime;
     screenShake = 5;
@@ -1773,11 +2126,29 @@
     tone(190, 0.05, "square", 0.035, -80);
   }
 
-  function fireEnemy(enemy) {
+  function spawnRemotePlayerShot(shot) {
+    if (!running || missionPhase !== MISSION_PHASE.COMBAT) return;
+    const tank = PLAYER_TANKS[shot.shotTankId] ?? PLAYER_TANKS.scout;
+    shells.push({
+      id: ++shellSerial,
+      kind: "direct",
+      x: shot.shotX + Math.sin(shot.shotYaw) * 1.8,
+      y: 0.86,
+      z: shot.shotZ + Math.cos(shot.shotYaw) * 1.8,
+      vx: Math.sin(shot.shotYaw) * tank.shellSpeed,
+      vz: Math.cos(shot.shotYaw) * tank.shellSpeed,
+      life: tank.shellLifetime,
+      owner: "ally"
+    });
+    tone(92, 0.08, "square", 0.012, -30);
+  }
+
+  function fireEnemy(enemy, target) {
     const type = getEnemyType(enemy);
-    const accuracy = Math.min(0.18, 0.08 + distance(player, enemy) * 0.0015);
+    const accuracy = Math.min(0.18, 0.08 + distance(target, enemy) * 0.0015);
     const shotYaw = enemy.turretHeading + (Math.random() - 0.5) * accuracy;
     shells.push({
+      id: ++shellSerial,
       kind: "direct",
       x: enemy.x + Math.sin(shotYaw) * 1.7,
       y: 0.72,
@@ -1785,12 +2156,13 @@
       vx: Math.sin(shotYaw) * type.shellSpeed,
       vz: Math.cos(shotYaw) * type.shellSpeed,
       life: type.shellLifetime,
-      owner: "enemy"
+      owner: "enemy",
+      targetRole: target.role
     });
     tone(105, 0.08, "square", 0.018, -35);
   }
 
-  function fireArtillery(enemy) {
+  function fireArtillery(enemy, target) {
     const type = getEnemyType(enemy);
     const muzzle = orientedPoint(enemy, 0, 1.45, 1.55, enemy.turretHeading);
     const leadTime = 0.7 + Math.random() * 0.35;
@@ -1798,8 +2170,8 @@
       -WORLD_LIMIT + 2,
       Math.min(
         WORLD_LIMIT - 2,
-        player.x +
-          Math.sin(player.heading) * player.speed * leadTime +
+        target.x +
+          Math.sin(target.heading) * (target.speed ?? 0) * leadTime +
           (Math.random() - 0.5) * 2.2
       )
     );
@@ -1807,8 +2179,8 @@
       -WORLD_LIMIT + 2,
       Math.min(
         WORLD_LIMIT - 2,
-        player.z +
-          Math.cos(player.heading) * player.speed * leadTime +
+        target.z +
+          Math.cos(target.heading) * (target.speed ?? 0) * leadTime +
           (Math.random() - 0.5) * 2.2
       )
     );
@@ -1816,8 +2188,10 @@
     const shotRange = Math.hypot(targetX - muzzle.x, targetZ - muzzle.z);
 
     shells.push({
+      id: ++shellSerial,
       kind: "artillery",
       owner: "enemy",
+      targetRole: target.role,
       x: muzzle.x,
       y: muzzle.y,
       z: muzzle.z,
@@ -1984,7 +2358,128 @@
     enemy.heading = normalizeAngle(enemy.heading + enemy.strafeDirection * 0.32);
   }
 
-  function updateEnemyTurret(enemy, targetHeading, range, dt) {
+  function separateEnemy(enemy, pushX, pushZ) {
+    const type = getEnemyType(enemy);
+    if (type.static) return false;
+    const nextX = Math.max(
+      -WORLD_LIMIT + 1.5,
+      Math.min(WORLD_LIMIT - 1.5, enemy.x + pushX)
+    );
+    const nextZ = Math.max(
+      -WORLD_LIMIT + 1.5,
+      Math.min(WORLD_LIMIT - 1.5, enemy.z + pushZ)
+    );
+    if (circleCollision(nextX, nextZ, 1.12 * type.scale)) return false;
+    enemy.x = nextX;
+    enemy.z = nextZ;
+    enemy.state = ENEMY_STATE.REPOSITION;
+    enemy.stateTimer = 0.55 + Math.random() * 0.3;
+    return true;
+  }
+
+  function resolveEnemyOverlaps() {
+    for (let a = 0; a < enemies.length; a += 1) {
+      for (let b = a + 1; b < enemies.length; b += 1) {
+        const first = enemies[a];
+        const second = enemies[b];
+        const firstType = getEnemyType(first);
+        const secondType = getEnemyType(second);
+        const minimumDistance =
+          1.12 * firstType.scale +
+          1.12 * secondType.scale +
+          0.32;
+        let dx = second.x - first.x;
+        let dz = second.z - first.z;
+        let currentDistance = Math.hypot(dx, dz);
+        if (currentDistance >= minimumDistance) continue;
+
+        if (currentDistance < 0.001) {
+          const escapeAngle =
+            ((first.id * 37 + second.id * 53) % 360) * Math.PI / 180;
+          dx = Math.sin(escapeAngle);
+          dz = Math.cos(escapeAngle);
+          currentDistance = 0;
+        } else {
+          dx /= currentDistance;
+          dz /= currentDistance;
+        }
+
+        const overlap = minimumDistance - Math.min(currentDistance, minimumDistance);
+        const firstStatic = firstType.static;
+        const secondStatic = secondType.static;
+        const firstShare = firstStatic ? 0 : secondStatic ? 1 : 0.5;
+        const secondShare = secondStatic ? 0 : firstStatic ? 1 : 0.5;
+        const firstMoved = separateEnemy(
+          first,
+          -dx * overlap * firstShare,
+          -dz * overlap * firstShare
+        );
+        const secondMoved = separateEnemy(
+          second,
+          dx * overlap * secondShare,
+          dz * overlap * secondShare
+        );
+
+        if (!firstMoved && !firstStatic && secondMoved) {
+          separateEnemy(first, dz * overlap, -dx * overlap);
+        }
+        if (!secondMoved && !secondStatic && firstMoved) {
+          separateEnemy(second, -dz * overlap, dx * overlap);
+        }
+        first.strafeDirection = -1;
+        second.strafeDirection = 1;
+      }
+    }
+  }
+
+  function getCombatTargets() {
+    const localRole = isCoopGame() ? networkSnapshot.role : "player";
+    const targets = [{
+      role: localRole,
+      x: player.x,
+      z: player.z,
+      heading: player.heading,
+      speed: player.speed,
+      health: player.health
+    }];
+    if (isCoopGame() && networkSnapshot.role === "host") {
+      for (const remote of remotePlayers.values()) {
+        if (
+          remote.role !== "guest" ||
+          remote.missionPhase !== MISSION_PHASE.COMBAT ||
+          coopHealth.guest <= 0
+        ) continue;
+        targets.push({
+          role: "guest",
+          x: remote.x,
+          z: remote.z,
+          heading: remote.heading,
+          speed: 0,
+          health: coopHealth.guest
+        });
+      }
+    }
+    return targets.filter((target) => target.health > 0);
+  }
+
+  function getTargetByRole(role) {
+    return getCombatTargets().find((target) => target.role === role) ?? null;
+  }
+
+  function chooseEnemyTarget(enemy) {
+    let chosen = null;
+    let chosenRange = Infinity;
+    for (const target of getCombatTargets()) {
+      const range = distance(enemy, target);
+      if (range < chosenRange) {
+        chosen = target;
+        chosenRange = range;
+      }
+    }
+    return chosen ? { target: chosen, range: chosenRange } : null;
+  }
+
+  function updateEnemyTurret(enemy, targetHeading, range, target, dt) {
     const type = getEnemyType(enemy);
     enemy.turretHeading = turnTowardAngle(
       enemy.turretHeading,
@@ -1997,8 +2492,8 @@
 
     const facingError = Math.abs(normalizeAngle(targetHeading - enemy.turretHeading));
     if (facingError <= type.fireAlignment) {
-      if (type.id === "artillery") fireArtillery(enemy);
-      else fireEnemy(enemy);
+      if (type.id === "artillery") fireArtillery(enemy, target);
+      else fireEnemy(enemy, target);
       enemy.reload =
         Math.max(type.reloadMin, type.reloadBase - player.wave * 0.08) +
         Math.random() * type.reloadJitter;
@@ -2007,42 +2502,82 @@
 
   function updateEnemies(dt) {
     for (const enemy of enemies) {
-      const dx = player.x - enemy.x;
-      const dz = player.z - enemy.z;
-      const range = Math.hypot(dx, dz);
+      const targetChoice = chooseEnemyTarget(enemy);
+      if (!targetChoice) continue;
+      const { target, range } = targetChoice;
+      const dx = target.x - enemy.x;
+      const dz = target.z - enemy.z;
       const targetHeading = Math.atan2(dx, dz);
 
       enemy.hitFlash = Math.max(0, enemy.hitFlash - dt);
       updateEnemyMovement(enemy, targetHeading, range, dt);
-      updateEnemyTurret(enemy, targetHeading, range, dt);
+      updateEnemyTurret(enemy, targetHeading, range, target, dt);
     }
+    resolveEnemyOverlaps();
   }
 
   function damagePlayer(amount, impactX, impactZ, shake = 12) {
     if (player.invulnerable > 0 || gameOver) return;
     player.health = Math.max(0, player.health - amount);
+    if (isCoopGame() && networkSnapshot.role === "host") {
+      coopHealth.host = player.health;
+    }
     player.invulnerable = 0.55;
     flash = 1;
     screenShake = Math.max(screenShake, shake);
     burst(impactX, impactZ, COLORS.red, 18);
     tone(92, 0.25, "sawtooth", 0.08, -45);
-    if (player.health <= 0) endGame();
+    if (player.health <= 0) {
+      if (isCoopGame() && networkSnapshot.role === "host") {
+        sharedGameOver = true;
+        publishSharedWorld();
+      }
+      endGame();
+    }
+  }
+
+  function damageCombatTarget(role, amount, impactX, impactZ, shake = 12) {
+    if (!isCoopGame() || role === networkSnapshot.role || role === "player") {
+      damagePlayer(amount, impactX, impactZ, shake);
+      return;
+    }
+    if (
+      networkSnapshot.role !== "host" ||
+      role !== "guest" ||
+      coopInvulnerability.guest > 0 ||
+      sharedGameOver
+    ) return;
+    coopHealth.guest = Math.max(0, coopHealth.guest - amount);
+    coopInvulnerability.guest = 0.55;
+    burst(impactX, impactZ, COLORS.red, 18);
+    tone(82, 0.18, "sawtooth", 0.025, -35);
+    if (coopHealth.guest <= 0) {
+      sharedGameOver = true;
+      publishSharedWorld();
+      endGame();
+    }
   }
 
   function explodeArtilleryShell(shell) {
-    const blastDistance = Math.hypot(
+    const localBlastDistance = Math.hypot(
       shell.targetX - player.x,
       shell.targetZ - player.z
     );
     burst(shell.targetX, shell.targetZ, COLORS.red, 34);
     burst(shell.targetX, shell.targetZ, COLORS.amber, 18);
     createBlastSmoke(shell.targetX, shell.targetZ);
-    screenShake = Math.max(screenShake, Math.max(2, 13 - blastDistance * 0.18));
+    screenShake = Math.max(screenShake, Math.max(2, 13 - localBlastDistance * 0.18));
     tone(44, 0.48, "sawtooth", 0.095, -12);
 
-    if (blastDistance <= shell.blastRadius) {
+    for (const target of getCombatTargets()) {
+      const blastDistance = Math.hypot(
+        shell.targetX - target.x,
+        shell.targetZ - target.z
+      );
+      if (blastDistance > shell.blastRadius) continue;
       const falloff = 1 - blastDistance / shell.blastRadius * 0.35;
-      damagePlayer(
+      damageCombatTarget(
+        target.role,
         Math.round(shell.blastDamage * falloff),
         shell.targetX,
         shell.targetZ,
@@ -2097,7 +2632,7 @@
         continue;
       }
 
-      if (shell.owner === "player") {
+      if (shell.owner === "player" || shell.owner === "ally") {
         const enemyIndex = enemies.findIndex((enemy) => {
           const hitRadius = 1.45 * getEnemyType(enemy).hitRadius;
           return Math.hypot(shell.x - enemy.x, shell.z - enemy.z) < hitRadius;
@@ -2105,6 +2640,11 @@
         if (enemyIndex !== -1) {
           const enemy = enemies[enemyIndex];
           const type = getEnemyType(enemy);
+          if (!isWorldAuthority()) {
+            shells.splice(i, 1);
+            burst(shell.x, shell.z, COLORS.amber, 7);
+            continue;
+          }
           enemy.health -= 1;
           enemy.hitFlash = 0.14;
           shells.splice(i, 1);
@@ -2121,9 +2661,14 @@
             player.score += 25;
           }
         }
-      } else if (Math.hypot(shell.x - player.x, shell.z - player.z) < 1.2) {
-        shells.splice(i, 1);
-        damagePlayer(18, shell.x, shell.z, 12);
+      } else {
+        const target =
+          getTargetByRole(shell.targetRole) ??
+          getCombatTargets()[0];
+        if (target && Math.hypot(shell.x - target.x, shell.z - target.z) < 1.2) {
+          shells.splice(i, 1);
+          damageCombatTarget(target.role, 18, shell.x, shell.z, 12);
+        }
       }
     }
   }
@@ -2160,7 +2705,7 @@
     createLandingDust();
     tone(48, 0.42, "sawtooth", 0.1, -16);
     tone(130, 0.16, "square", 0.045, -70);
-    spawnWave();
+    if (isWorldAuthority()) spawnWave();
   }
 
   function updateDropSequence(dt) {
@@ -2188,31 +2733,41 @@
       updateParticles(dt);
       updateScreenEffects(dt);
       updateRemotePlayers(dt);
+      updateReplicatedWorld(dt);
       publishLocalPlayerState();
+      publishSharedWorld();
       return;
     }
 
     updatePlayer(dt);
     updateRemotePlayers(dt);
-    updateEnemies(dt);
+    updateReplicatedWorld(dt);
+    if (isWorldAuthority()) updateEnemies(dt);
     updateShells(dt);
     updateParticles(dt);
     updateScreenEffects(dt);
     waveBanner = Math.max(0, waveBanner - dt);
 
-    if (enemies.length === 0 && !gameOver) {
+    coopInvulnerability.guest = Math.max(0, coopInvulnerability.guest - dt);
+
+    if (isWorldAuthority() && enemies.length === 0 && !gameOver) {
       waveBanner -= dt;
       if (!update.nextWaveTimer) update.nextWaveTimer = 1.7;
       update.nextWaveTimer -= dt;
       if (update.nextWaveTimer <= 0) {
         update.nextWaveTimer = 0;
         player.health = Math.min(100, player.health + 12);
+        if (isCoopGame() && networkSnapshot.role === "host") {
+          coopHealth.host = player.health;
+          coopHealth.guest = Math.min(100, coopHealth.guest + 12);
+        }
         spawnWave();
       }
     } else {
       update.nextWaveTimer = 0;
     }
     publishLocalPlayerState();
+    publishSharedWorld();
   }
 
   function loop(now) {

@@ -40,7 +40,7 @@
           ".validate": "!newData.exists() || newData.hasChildren(['meta', 'players'])",
           "meta": {
             ".write": "auth != null && root.child('battlezone/rooms').child($roomCode).child('meta/hostId').val() === auth.uid",
-            ".validate": "newData.hasChildren(['hostId', 'status', 'maxPlayers', 'version', 'worldSeed']) && newData.child('hostId').isString() && ((!data.exists() && newData.child('hostId').val() === auth.uid) || (data.exists() && newData.child('hostId').val() === data.child('hostId').val())) && newData.child('worldSeed').isNumber() && newData.child('worldSeed').val() >= 1 && newData.child('worldSeed').val() <= 4294967295 && newData.child('maxPlayers').val() === 2 && newData.child('version').val() === 1 && (newData.child('status').val() === 'lobby' || newData.child('status').val() === 'playing' || newData.child('status').val() === 'closed')"
+            ".validate": "newData.hasChildren(['hostId', 'status', 'maxPlayers', 'version', 'worldSeed']) && newData.child('hostId').isString() && ((!data.exists() && newData.child('hostId').val() === auth.uid) || (data.exists() && newData.child('hostId').val() === data.child('hostId').val())) && newData.child('worldSeed').isNumber() && newData.child('worldSeed').val() >= 1 && newData.child('worldSeed').val() <= 4294967295 && newData.child('maxPlayers').val() === 2 && newData.child('version').val() === 2 && (newData.child('status').val() === 'lobby' || newData.child('status').val() === 'playing' || newData.child('status').val() === 'closed')"
           },
           "players": {
             "host": {
@@ -54,6 +54,10 @@
             "$other": {
               ".validate": false
             }
+          },
+          "world": {
+            ".write": "auth != null && root.child('battlezone/rooms').child($roomCode).child('meta/hostId').val() === auth.uid",
+            ".validate": "newData.hasChildren(['sequence', 'wave', 'score', 'kills', 'health', 'gameOver', 'updatedAt']) && newData.child('sequence').isNumber() && newData.child('wave').isNumber() && newData.child('wave').val() >= 0 && newData.child('score').isNumber() && newData.child('score').val() >= 0 && newData.child('kills').isNumber() && newData.child('kills').val() >= 0 && newData.child('health').hasChildren(['host', 'guest']) && newData.child('health/host').isNumber() && newData.child('health/host').val() >= 0 && newData.child('health/host').val() <= 100 && newData.child('health/guest').isNumber() && newData.child('health/guest').val() >= 0 && newData.child('health/guest').val() <= 100 && newData.child('gameOver').isBoolean() && newData.child('updatedAt').isNumber()"
           }
         }
       }

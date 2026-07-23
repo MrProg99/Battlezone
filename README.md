@@ -30,7 +30,9 @@ Puis ouvrir `http://localhost:8000`.
 
 - Vue cockpit en perspective 3D
 - Largage aérien du tank avec altimètre et impact au sol
+- Choix entre l’Éclaireur rapide à courte portée et le Bastion lent à longue portée
 - Conduite et tourelle indépendantes
-- Tanks ennemis avec états tactiques, distance de combat et tourelle indépendante
+- Trois ennemis : char d’assaut, chasseur léger et artillerie prioritaire
+- Obus d’artillerie en cloche avec zone d’impact, compte à rebours et dégâts de zone
 - Vagues progressives, score, blindage et radar
 - Effets sonores synthétisés et esthétique d’écran CRT

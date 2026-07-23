@@ -16,6 +16,49 @@
       <h1 id="game-title">BATTLE<span>ZONE</span></h1>
       <p class="tagline">Prototype d’assaut vectoriel</p>
 
+      <div class="tank-select-heading">
+        <span>Choisissez votre châssis</span>
+        <small>Configuration modifiable avant chaque mission</small>
+      </div>
+
+      <div class="tank-selection" role="radiogroup" aria-label="Type de tank">
+        <button
+          class="tank-card selected"
+          type="button"
+          role="radio"
+          aria-checked="true"
+          data-tank="scout"
+        >
+          <span class="tank-card-title">
+            <strong>Éclaireur</strong>
+            <em>Assaut rapproché</em>
+          </span>
+          <svg class="tank-icon" viewBox="0 0 120 44" aria-hidden="true">
+            <path d="M18 31h72l8 7H12l6-7Zm12-12h38l10 12H24l6-12Zm18-8h17v8H42l6-8Zm17 3h43" />
+          </svg>
+          <span class="tank-stat"><span>Vitesse</span><b>5 / 5</b></span>
+          <span class="tank-stat"><span>Portée</span><b>2 / 5</b></span>
+        </button>
+
+        <button
+          class="tank-card"
+          type="button"
+          role="radio"
+          aria-checked="false"
+          data-tank="bastion"
+        >
+          <span class="tank-card-title">
+            <strong>Bastion</strong>
+            <em>Appui à distance</em>
+          </span>
+          <svg class="tank-icon" viewBox="0 0 120 44" aria-hidden="true">
+            <path d="M14 28h82l10 10H8l6-10Zm17-14h45l14 14H22l9-14Zm17-8h24v8H42l6-8Zm24 4h43" />
+          </svg>
+          <span class="tank-stat"><span>Vitesse</span><b>2 / 5</b></span>
+          <span class="tank-stat"><span>Portée</span><b>5 / 5</b></span>
+        </button>
+      </div>
+
       <div class="controls">
         <div><kbd>W</kbd><kbd>S</kbd><span>Avancer / reculer</span></div>
         <div><kbd>A</kbd><kbd>D</kbd><span>Tourner le tank</span></div>
@@ -35,7 +78,10 @@
       <p class="message-kicker" id="message-kicker">TRANSMISSION</p>
       <h2 id="message-title">MISSION TERMINÉE</h2>
       <p id="message-copy"></p>
-      <button id="restart-button" type="button">Nouvelle mission <small>R</small></button>
+      <button id="restart-button" type="button">
+        Retour au hangar
+        <small>Changer de châssis</small>
+      </button>
     </section>
 
     <div class="pause-label hidden" id="pause-label">PAUSE</div>

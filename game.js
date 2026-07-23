@@ -11,6 +11,7 @@
   const messageCopy = document.querySelector("#message-copy");
   const restartButton = document.querySelector("#restart-button");
   const pauseLabel = document.querySelector("#pause-label");
+  const tankCards = [...document.querySelectorAll(".tank-card")];
 
   const TAU = Math.PI * 2;
   const NEAR = 0.22;
@@ -38,10 +39,79 @@
     EMERGENCY_RANGE: 10,
     APPROACH_MARGIN: 6,
     RETREAT_MARGIN: 5,
-    CHASSIS_TURN_RATE: 1.05,
-    TURRET_TURN_RATE: 1.7,
-    FIRE_RANGE: 48,
-    FIRE_ALIGNMENT: 0.14
+    CHASSIS_TURN_RATE: 1.05
+  });
+  const ENEMY_TYPES = Object.freeze({
+    assault: Object.freeze({
+      id: "assault",
+      label: "ASSAUT",
+      code: "T",
+      health: 2,
+      speed: 2.1,
+      speedVariance: 0.7,
+      preferredRangeMin: 20,
+      preferredRangeMax: 28,
+      scale: 1,
+      hitRadius: 1,
+      turretTurnRate: 1.7,
+      fireRange: 48,
+      fireAlignment: 0.14,
+      reloadBase: 2.8,
+      reloadMin: 1.25,
+      reloadJitter: 1.4,
+      shellSpeed: 21,
+      shellLifetime: 3.2,
+      score: 100,
+      static: false,
+      priority: false
+    }),
+    light: Object.freeze({
+      id: "light",
+      label: "CHASSEUR",
+      code: "L",
+      health: 1,
+      speed: 3.8,
+      speedVariance: 0.8,
+      preferredRangeMin: 13,
+      preferredRangeMax: 19,
+      scale: 0.72,
+      hitRadius: 0.78,
+      turretTurnRate: 2.35,
+      fireRange: 34,
+      fireAlignment: 0.18,
+      reloadBase: 2.15,
+      reloadMin: 1.05,
+      reloadJitter: 1,
+      shellSpeed: 19,
+      shellLifetime: 2.3,
+      score: 140,
+      static: false,
+      priority: false
+    }),
+    artillery: Object.freeze({
+      id: "artillery",
+      label: "ARTILLERIE",
+      code: "A",
+      health: 2,
+      speed: 0,
+      speedVariance: 0,
+      preferredRangeMin: 44,
+      preferredRangeMax: 62,
+      scale: 1.16,
+      hitRadius: 1.2,
+      turretTurnRate: 0.82,
+      fireRange: 72,
+      fireAlignment: 0.2,
+      reloadBase: 5.4,
+      reloadMin: 3.8,
+      reloadJitter: 1.2,
+      shellFlightTime: 2.75,
+      blastRadius: 4.8,
+      blastDamage: 38,
+      score: 300,
+      static: true,
+      priority: true
+    })
   });
   const MISSION_PHASE = Object.freeze({
     IDLE: "idle",
@@ -52,6 +122,32 @@
     DURATION: 3.4,
     START_HEIGHT: 38,
     START_PITCH: 0.72
+  });
+  const PLAYER_TANKS = Object.freeze({
+    scout: Object.freeze({
+      id: "scout",
+      label: "ÉCLAIREUR",
+      forwardSpeed: 10.8,
+      reverseSpeed: 6.3,
+      turnRate: 1.5,
+      acceleration: 4.1,
+      coastResponse: 6,
+      shellSpeed: 34,
+      shellLifetime: 1.08,
+      reloadTime: 0.72
+    }),
+    bastion: Object.freeze({
+      id: "bastion",
+      label: "BASTION",
+      forwardSpeed: 6.4,
+      reverseSpeed: 3.9,
+      turnRate: 0.95,
+      acceleration: 2.6,
+      coastResponse: 4.5,
+      shellSpeed: 34,
+      shellLifetime: 2.35,
+      reloadTime: 0.72
+    })
   });
 
   let width = 0;
@@ -77,6 +173,7 @@
   let landingPulse = 0;
   let enemySerial = 0;
   let audioContext = null;
+  let selectedTankId = "scout";
 
   const keys = new Set();
   const enemies = [];
@@ -85,6 +182,7 @@
   const rocks = [];
 
   const player = {
+    tankId: selectedTankId,
     x: 0,
     altitude: 0,
     z: 4,
@@ -98,6 +196,25 @@
     kills: 0,
     invulnerable: 0
   };
+
+  function getPlayerTank() {
+    return PLAYER_TANKS[player.tankId] ?? PLAYER_TANKS.scout;
+  }
+
+  function getEnemyType(enemy) {
+    return ENEMY_TYPES[enemy.typeId] ?? ENEMY_TYPES.assault;
+  }
+
+  function selectPlayerTank(tankId) {
+    if (!PLAYER_TANKS[tankId]) return;
+    selectedTankId = tankId;
+    if (missionPhase === MISSION_PHASE.IDLE) player.tankId = tankId;
+    for (const card of tankCards) {
+      const selected = card.dataset.tank === tankId;
+      card.classList.toggle("selected", selected);
+      card.setAttribute("aria-checked", String(selected));
+    }
+  }
 
   function resize() {
     dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -306,49 +423,224 @@
     }
   }
 
-  function drawEnemy(enemy) {
-    const centerProjection = project({ x: enemy.x, y: 0.85, z: enemy.z });
-    if (!centerProjection) return;
-    const range = distance(player, enemy);
-    const fade = Math.max(0.32, Math.min(1, 1.35 - range / 90));
-    const hitFlash = enemy.hitFlash > 0;
-    const color = hitFlash ? COLORS.white : COLORS.red;
+  function drawMobileEnemy(enemy, type, color, fade) {
+    const scale = type.scale;
+    drawBox(
+      enemy,
+      [0.95 * scale, 0.42 * scale, 1.25 * scale],
+      enemy.heading,
+      color,
+      fade
+    );
 
-    drawBox(enemy, [0.95, 0.42, 1.25], enemy.heading, color, fade);
+    const turretOrigin = orientedPoint(enemy, 0, 0, 0.08 * scale, enemy.heading);
+    drawBox(
+      turretOrigin,
+      [0.58 * scale, 0.75 * scale, 0.62 * scale],
+      enemy.turretHeading,
+      color,
+      fade
+    );
 
-    const turretOrigin = orientedPoint(enemy, 0, 0, 0.08, enemy.heading);
-    drawBox(turretOrigin, [0.58, 0.75, 0.62], enemy.turretHeading, color, fade);
+    const barrelY = 0.56 * scale;
+    const barrelStart = orientedPoint(
+      enemy,
+      0,
+      barrelY,
+      0.55 * scale,
+      enemy.turretHeading
+    );
+    const barrelEnd = orientedPoint(
+      enemy,
+      0,
+      barrelY,
+      2.05 * scale,
+      enemy.turretHeading
+    );
+    line3d(barrelStart, barrelEnd, color, type.id === "light" ? 1.3 : 2, fade);
 
-    const barrelStart = orientedPoint(enemy, 0, 0.56, 0.55, enemy.turretHeading);
-    const barrelEnd = orientedPoint(enemy, 0, 0.56, 2.05, enemy.turretHeading);
-    line3d(barrelStart, barrelEnd, color, 2, fade);
+    const trackOffset = 1.08 * scale;
+    const trackLength = 1.22 * scale;
+    const trackY = 0.12 * scale;
+    line3d(
+      orientedPoint(enemy, -trackOffset, trackY, -trackLength, enemy.heading),
+      orientedPoint(enemy, -trackOffset, trackY, trackLength, enemy.heading),
+      color,
+      2,
+      fade
+    );
+    line3d(
+      orientedPoint(enemy, trackOffset, trackY, -trackLength, enemy.heading),
+      orientedPoint(enemy, trackOffset, trackY, trackLength, enemy.heading),
+      color,
+      2,
+      fade
+    );
+  }
 
-    const trackLeftA = orientedPoint(enemy, -1.08, 0.12, -1.22, enemy.heading);
-    const trackLeftB = orientedPoint(enemy, -1.08, 0.12, 1.22, enemy.heading);
-    const trackRightA = orientedPoint(enemy, 1.08, 0.12, -1.22, enemy.heading);
-    const trackRightB = orientedPoint(enemy, 1.08, 0.12, 1.22, enemy.heading);
-    line3d(trackLeftA, trackLeftB, color, 2, fade);
-    line3d(trackRightA, trackRightB, color, 2, fade);
+  function drawArtilleryEnemy(enemy, color, fade) {
+    drawBox(enemy, [1.25, 0.34, 1.18], enemy.heading, color, fade);
+    const turretOrigin = orientedPoint(enemy, 0, 0, 0.04, enemy.heading);
+    drawBox(turretOrigin, [0.72, 0.88, 0.7], enemy.turretHeading, color, fade);
 
-    if (centerProjection.depth < 42) {
-      const labelY = centerProjection.y - Math.min(80, 45 / centerProjection.depth * 18);
-      ctx.font = "9px Courier New";
-      ctx.textAlign = "center";
-      ctx.fillStyle = color;
-      ctx.globalAlpha = fade * 0.8;
-      ctx.fillText(`T-${String(enemy.id).padStart(2, "0")}  ${Math.round(range * 10)}m`, centerProjection.x, labelY);
-      const barWidth = Math.min(34, 180 / centerProjection.depth);
-      ctx.strokeRect(centerProjection.x - barWidth / 2, labelY + 5, barWidth, 3);
-      ctx.fillRect(centerProjection.x - barWidth / 2, labelY + 5, barWidth * (enemy.health / enemy.maxHealth), 3);
-      ctx.globalAlpha = 1;
+    const barrelStart = orientedPoint(enemy, 0, 0.7, 0.48, enemy.turretHeading);
+    const barrelEnd = orientedPoint(enemy, 0, 1.72, 2.35, enemy.turretHeading);
+    line3d(barrelStart, barrelEnd, color, 2.4, fade);
+
+    for (let i = 0; i < 4; i += 1) {
+      const angle = enemy.heading + Math.PI / 4 + i * Math.PI / 2;
+      const near = {
+        x: enemy.x + Math.sin(angle) * 0.72,
+        y: 0.16,
+        z: enemy.z + Math.cos(angle) * 0.72
+      };
+      const far = {
+        x: enemy.x + Math.sin(angle) * 1.9,
+        y: 0.02,
+        z: enemy.z + Math.cos(angle) * 1.9
+      };
+      const footLeft = {
+        x: far.x + Math.sin(angle + Math.PI / 2) * 0.28,
+        y: 0.02,
+        z: far.z + Math.cos(angle + Math.PI / 2) * 0.28
+      };
+      const footRight = {
+        x: far.x + Math.sin(angle - Math.PI / 2) * 0.28,
+        y: 0.02,
+        z: far.z + Math.cos(angle - Math.PI / 2) * 0.28
+      };
+      line3d(near, far, color, 1.4, fade);
+      line3d(footLeft, footRight, color, 1.2, fade);
     }
   }
 
+  function drawEnemy(enemy) {
+    const type = getEnemyType(enemy);
+    const centerProjection = project({
+      x: enemy.x,
+      y: type.id === "artillery" ? 1 : 0.85 * type.scale,
+      z: enemy.z
+    });
+    if (!centerProjection) return;
+
+    const range = distance(player, enemy);
+    const fade = Math.max(0.32, Math.min(1, 1.35 - range / 90));
+    const baseColor = type.priority ? COLORS.amber : COLORS.red;
+    const color = enemy.hitFlash > 0 ? COLORS.white : baseColor;
+
+    if (type.id === "artillery") {
+      drawArtilleryEnemy(enemy, color, fade);
+    } else {
+      drawMobileEnemy(enemy, type, color, fade);
+    }
+
+    const labelRange = type.priority ? 60 : 42;
+    if (centerProjection.depth >= labelRange) return;
+
+    const labelY =
+      centerProjection.y - Math.min(88, 48 / centerProjection.depth * 18);
+    ctx.save();
+    ctx.font = "9px Courier New";
+    ctx.textAlign = "center";
+    ctx.fillStyle = color;
+    ctx.globalAlpha = fade * 0.88;
+    ctx.fillText(
+      `${type.code}-${String(enemy.id).padStart(2, "0")} ${type.label}  ${Math.round(range * 10)}m`,
+      centerProjection.x,
+      labelY
+    );
+
+    if (type.priority) {
+      const pulse = 3 + Math.sin(performance.now() * 0.009) * 2;
+      ctx.fillStyle = COLORS.amber;
+      ctx.fillText("▲ PRIORITÉ ▲", centerProjection.x, labelY - 13);
+      ctx.strokeStyle = COLORS.amber;
+      ctx.strokeRect(
+        centerProjection.x - 28 - pulse,
+        centerProjection.y - 20 - pulse,
+        56 + pulse * 2,
+        40 + pulse * 2
+      );
+    }
+
+    const barWidth = Math.min(42, 220 / centerProjection.depth);
+    ctx.strokeStyle = color;
+    ctx.strokeRect(centerProjection.x - barWidth / 2, labelY + 5, barWidth, 3);
+    ctx.fillRect(
+      centerProjection.x - barWidth / 2,
+      labelY + 5,
+      barWidth * (enemy.health / enemy.maxHealth),
+      3
+    );
+    ctx.restore();
+  }
+
+  function drawArtilleryTarget(shell) {
+    const timeLeft = Math.max(0, shell.flightTime - shell.elapsed);
+    const urgent = timeLeft < 0.7;
+    const color = urgent ? COLORS.red : COLORS.amber;
+    const pulse = 1 + Math.sin(performance.now() * 0.014) * 0.08;
+    const radius = shell.blastRadius * pulse;
+    const segments = 24;
+
+    for (let i = 0; i < segments; i += 1) {
+      const angleA = i / segments * TAU;
+      const angleB = (i + 1) / segments * TAU;
+      line3d(
+        {
+          x: shell.targetX + Math.sin(angleA) * radius,
+          y: 0.04,
+          z: shell.targetZ + Math.cos(angleA) * radius
+        },
+        {
+          x: shell.targetX + Math.sin(angleB) * radius,
+          y: 0.04,
+          z: shell.targetZ + Math.cos(angleB) * radius
+        },
+        color,
+        urgent ? 2 : 1.2,
+        urgent ? 0.95 : 0.65
+      );
+    }
+
+    line3d(
+      { x: shell.targetX - radius, y: 0.04, z: shell.targetZ },
+      { x: shell.targetX + radius, y: 0.04, z: shell.targetZ },
+      color,
+      1,
+      0.55
+    );
+    line3d(
+      { x: shell.targetX, y: 0.04, z: shell.targetZ - radius },
+      { x: shell.targetX, y: 0.04, z: shell.targetZ + radius },
+      color,
+      1,
+      0.55
+    );
+
+    const center = project({ x: shell.targetX, y: 0.06, z: shell.targetZ });
+    if (!center) return;
+    ctx.save();
+    ctx.fillStyle = color;
+    ctx.font = "9px Courier New";
+    ctx.textAlign = "center";
+    ctx.globalAlpha = urgent ? 1 : 0.75;
+    ctx.fillText(`IMPACT ${timeLeft.toFixed(1)}s`, center.x, center.y - 9);
+    ctx.restore();
+  }
+
   function drawShell(shell) {
+    const artillery = shell.kind === "artillery";
+    if (artillery) drawArtilleryTarget(shell);
+
     const p = project({ x: shell.x, y: shell.y, z: shell.z });
     if (!p) return;
-    const radius = Math.max(1.4, Math.min(7, 18 / p.depth));
-    const color = shell.owner === "player" ? COLORS.amber : COLORS.red;
+    const radius = Math.max(
+      artillery ? 2.4 : 1.4,
+      Math.min(artillery ? 10 : 7, (artillery ? 26 : 18) / p.depth)
+    );
+    const color =
+      shell.owner === "player" || artillery ? COLORS.amber : COLORS.red;
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
     ctx.fillStyle = color;
@@ -358,6 +650,19 @@
     ctx.arc(p.x, p.y, radius, 0, TAU);
     ctx.fill();
     ctx.restore();
+
+    if (artillery) {
+      for (let i = 1; i < shell.trail.length; i += 1) {
+        line3d(
+          shell.trail[i - 1],
+          shell.trail[i],
+          COLORS.amber,
+          1.2,
+          i / shell.trail.length * 0.6
+        );
+      }
+      return;
+    }
 
     const tail = {
       x: shell.x - shell.vx * 0.045,
@@ -562,6 +867,7 @@
     ctx.fill();
 
     for (const enemy of enemies) {
+      const type = getEnemyType(enemy);
       const dx = enemy.x - player.x;
       const dz = enemy.z - player.z;
       const right = dx * Math.cos(yaw) - dz * Math.sin(yaw);
@@ -570,8 +876,32 @@
       const py = (-forward / range) * radius;
       const length = Math.hypot(px, py);
       const scale = length > radius - 4 ? (radius - 4) / length : 1;
-      ctx.fillStyle = COLORS.red;
-      ctx.fillRect(px * scale - 2, py * scale - 2, 4, 4);
+      const markerX = px * scale;
+      const markerY = py * scale;
+      ctx.fillStyle = type.priority ? COLORS.amber : COLORS.red;
+
+      if (type.priority) {
+        const pulse = 5 + Math.sin(performance.now() * 0.01) * 1.5;
+        ctx.strokeStyle = COLORS.amber;
+        ctx.globalAlpha = 0.55;
+        ctx.beginPath();
+        ctx.arc(markerX, markerY, pulse, 0, TAU);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+        ctx.save();
+        ctx.translate(markerX, markerY);
+        ctx.rotate(Math.PI / 4);
+        ctx.fillRect(-3, -3, 6, 6);
+        ctx.restore();
+      } else {
+        const markerSize = type.id === "light" ? 3 : 4;
+        ctx.fillRect(
+          markerX - markerSize / 2,
+          markerY - markerSize / 2,
+          markerSize,
+          markerSize
+        );
+      }
     }
     ctx.restore();
 
@@ -583,14 +913,18 @@
 
   function drawHud() {
     const margin = width < 560 ? 14 : 28;
+    const tank = getPlayerTank();
+    const range = Math.round(tank.shellSpeed * tank.shellLifetime * 10);
     ctx.save();
     ctx.font = "11px Courier New";
     ctx.textAlign = "left";
+    ctx.fillStyle = COLORS.amber;
+    ctx.fillText(`${tank.label} // PORTÉE ${range}m`, margin, 30);
     ctx.fillStyle = COLORS.green;
-    ctx.fillText(`SCORE ${String(player.score).padStart(6, "0")}`, margin, 30);
-    ctx.fillText(`VAGUE ${String(player.wave).padStart(2, "0")}`, margin, 47);
+    ctx.fillText(`SCORE ${String(player.score).padStart(6, "0")}`, margin, 47);
+    ctx.fillText(`VAGUE ${String(player.wave).padStart(2, "0")}`, margin, 64);
     ctx.fillStyle = COLORS.red;
-    ctx.fillText(`CIBLES ${String(enemies.length).padStart(2, "0")}`, margin, 64);
+    ctx.fillText(`CIBLES ${String(enemies.length).padStart(2, "0")}`, margin, 81);
 
     const armorWidth = Math.min(180, width * 0.34);
     const armorX = margin;
@@ -614,8 +948,37 @@
     ctx.strokeStyle = ready ? COLORS.amber : COLORS.green;
     ctx.strokeRect(reloadX, reloadY, reloadWidth, 8);
     ctx.fillStyle = ready ? COLORS.amber : COLORS.green;
-    const reloadProgress = ready ? 1 : 1 - player.reload / 0.72;
+    const reloadProgress = ready ? 1 : 1 - player.reload / tank.reloadTime;
     ctx.fillRect(reloadX + 2, reloadY + 2, (reloadWidth - 4) * Math.max(0, reloadProgress), 4);
+    ctx.restore();
+  }
+
+  function drawIncomingArtilleryWarning() {
+    let incoming = null;
+    for (const shell of shells) {
+      if (shell.kind !== "artillery") continue;
+      const dangerDistance = Math.hypot(
+        shell.targetX - player.x,
+        shell.targetZ - player.z
+      );
+      if (dangerDistance > shell.blastRadius + 2.5) continue;
+      if (!incoming || shell.life < incoming.life) incoming = shell;
+    }
+    if (!incoming) return;
+
+    const urgent = incoming.life < 0.75;
+    const visible = !urgent || Math.floor(performance.now() / 90) % 2 === 0;
+    if (!visible) return;
+
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.fillStyle = urgent ? COLORS.red : COLORS.amber;
+    ctx.font = "700 11px Courier New";
+    ctx.fillText(
+      `⚠ IMPACT ARTILLERIE ${Math.max(0, incoming.life).toFixed(1)}s ⚠`,
+      width / 2,
+      88
+    );
     ctx.restore();
   }
 
@@ -644,6 +1007,7 @@
   }
 
   function drawDropHud() {
+    const tank = getPlayerTank();
     const progress = Math.min(1, dropElapsed / DROP_SEQUENCE.DURATION);
     const remaining = Math.max(0, DROP_SEQUENCE.DURATION - dropElapsed);
     const descentSpeed =
@@ -654,7 +1018,7 @@
     ctx.textAlign = "center";
     ctx.fillStyle = COLORS.amber;
     ctx.font = "10px Courier New";
-    ctx.fillText("LARGAGE TACTIQUE // DESCENTE", centerX, 32);
+    ctx.fillText(`LARGAGE TACTIQUE // ${tank.label}`, centerX, 32);
     ctx.fillStyle = COLORS.green;
     ctx.font = "12px Courier New";
     ctx.fillText(
@@ -763,6 +1127,7 @@
       drawRadar();
       drawHud();
       drawWaveBanner();
+      drawIncomingArtilleryWarning();
     }
     drawLandingImpact();
 
@@ -793,34 +1158,62 @@
     };
   }
 
+  function getWaveEnemyType(index, count) {
+    if (index === count - 1) return ENEMY_TYPES.artillery;
+    if (index % 3 === 1) return ENEMY_TYPES.light;
+    return ENEMY_TYPES.assault;
+  }
+
+  function createEnemy(type, position) {
+    const initialHeading = Math.atan2(
+      player.x - position.x,
+      player.z - position.z
+    );
+    const assaultBonus = type.id === "assault" && player.wave >= 4 ? 1 : 0;
+    const artilleryBonus = type.id === "artillery" && player.wave >= 6 ? 1 : 0;
+    const health = type.health + assaultBonus + artilleryBonus;
+
+    return {
+      id: ++enemySerial,
+      typeId: type.id,
+      x: position.x,
+      z: position.z,
+      heading: initialHeading,
+      turretHeading: initialHeading,
+      speed:
+        type.speed +
+        Math.random() * type.speedVariance +
+        (type.static ? 0 : player.wave * 0.08),
+      health,
+      maxHealth: health,
+      reload:
+        type.id === "artillery"
+          ? 3 + Math.random() * 1.2
+          : 1.2 + Math.random() * 2,
+      preferredRange:
+        type.preferredRangeMin +
+        Math.random() * (type.preferredRangeMax - type.preferredRangeMin),
+      strafeDirection: Math.random() < 0.5 ? -1 : 1,
+      state: type.static ? ENEMY_STATE.ENGAGE : ENEMY_STATE.APPROACH,
+      stateTimer: Math.random() * 0.4,
+      hitFlash: 0
+    };
+  }
+
   function spawnWave() {
     player.wave += 1;
     const count = Math.min(3 + player.wave, 9);
     for (let i = 0; i < count; i += 1) {
-      let position = randomSpawn(30, 58);
+      const type = getWaveEnemyType(i, count);
+      const minimumRange = type.id === "artillery" ? 44 : 30;
+      const maximumRange = type.id === "artillery" ? 66 : 58;
+      let position = randomSpawn(minimumRange, maximumRange);
       let attempts = 0;
       while (rocks.some((rock) => distance(position, rock) < rock.radius + 3) && attempts < 12) {
-        position = randomSpawn(30, 58);
+        position = randomSpawn(minimumRange, maximumRange);
         attempts += 1;
       }
-      const health = player.wave >= 4 && i % 3 === 0 ? 3 : 2;
-      const initialHeading = Math.atan2(player.x - position.x, player.z - position.z);
-      enemies.push({
-        id: ++enemySerial,
-        x: position.x,
-        z: position.z,
-        heading: initialHeading,
-        turretHeading: initialHeading,
-        speed: 2.1 + Math.random() * 0.7 + player.wave * 0.08,
-        health,
-        maxHealth: health,
-        reload: 1.2 + Math.random() * 2,
-        preferredRange: 20 + Math.random() * 8,
-        strafeDirection: Math.random() < 0.5 ? -1 : 1,
-        state: ENEMY_STATE.APPROACH,
-        stateTimer: Math.random() * 0.4,
-        hitFlash: 0
-      });
+      enemies.push(createEnemy(type, position));
     }
     waveText = `VAGUE ${String(player.wave).padStart(2, "0")}`;
     waveBanner = 2.8;
@@ -849,6 +1242,7 @@
     particles.length = 0;
     enemySerial = 0;
     Object.assign(player, {
+      tankId: selectedTankId,
       x: 0,
       altitude: DROP_SEQUENCE.START_HEIGHT,
       z: 4,
@@ -888,6 +1282,16 @@
     startScreen.classList.add("hidden");
     canvas.requestPointerLock?.();
     lastTime = performance.now();
+  }
+
+  function returnToHangar() {
+    resetGame();
+    running = false;
+    missionPhase = MISSION_PHASE.IDLE;
+    player.altitude = 0;
+    cameraPitch = 0;
+    startScreen.classList.remove("hidden");
+    document.exitPointerLock?.();
   }
 
   function endGame() {
@@ -1008,6 +1412,30 @@
     }
   }
 
+  function createBlastSmoke(x, z) {
+    for (let i = 0; i < 18; i += 1) {
+      const angle = Math.random() * TAU;
+      const speed = 0.8 + Math.random() * 3.4;
+      const life = 0.8 + Math.random() * 0.75;
+      particles.push({
+        kind: "smoke",
+        x: x + (Math.random() - 0.5) * 1.4,
+        y: 0.18 + Math.random() * 0.45,
+        z: z + (Math.random() - 0.5) * 1.4,
+        vx: Math.sin(angle) * speed,
+        vy: 1 + Math.random() * 2.2,
+        vz: Math.cos(angle) * speed,
+        gravity: -0.08,
+        drag: 1.25,
+        growth: 24 + Math.random() * 22,
+        life,
+        maxLife: life,
+        size: 16 + Math.random() * 14,
+        color: i % 2 === 0 ? "#9a9d83" : "#666f62"
+      });
+    }
+  }
+
   function firePlayer() {
     if (
       !running ||
@@ -1016,36 +1444,87 @@
       missionPhase !== MISSION_PHASE.COMBAT ||
       player.reload > 0
     ) return;
+    const tank = getPlayerTank();
     const yaw = player.heading + player.turretOffset;
     shells.push({
+      kind: "direct",
       x: player.x + Math.sin(yaw) * 1.8,
       y: 0.86,
       z: player.z + Math.cos(yaw) * 1.8,
-      vx: Math.sin(yaw) * 37,
-      vz: Math.cos(yaw) * 37,
-      life: 2.25,
+      vx: Math.sin(yaw) * tank.shellSpeed,
+      vz: Math.cos(yaw) * tank.shellSpeed,
+      life: tank.shellLifetime,
       owner: "player"
     });
     createMuzzleSmoke(yaw);
-    player.reload = 0.72;
+    player.reload = tank.reloadTime;
     screenShake = 5;
     tone(74, 0.12, "sawtooth", 0.07, -28);
     tone(190, 0.05, "square", 0.035, -80);
   }
 
   function fireEnemy(enemy) {
+    const type = getEnemyType(enemy);
     const accuracy = Math.min(0.18, 0.08 + distance(player, enemy) * 0.0015);
     const shotYaw = enemy.turretHeading + (Math.random() - 0.5) * accuracy;
     shells.push({
+      kind: "direct",
       x: enemy.x + Math.sin(shotYaw) * 1.7,
       y: 0.72,
       z: enemy.z + Math.cos(shotYaw) * 1.7,
-      vx: Math.sin(shotYaw) * 21,
-      vz: Math.cos(shotYaw) * 21,
-      life: 3.2,
+      vx: Math.sin(shotYaw) * type.shellSpeed,
+      vz: Math.cos(shotYaw) * type.shellSpeed,
+      life: type.shellLifetime,
       owner: "enemy"
     });
     tone(105, 0.08, "square", 0.018, -35);
+  }
+
+  function fireArtillery(enemy) {
+    const type = getEnemyType(enemy);
+    const muzzle = orientedPoint(enemy, 0, 1.45, 1.55, enemy.turretHeading);
+    const leadTime = 0.7 + Math.random() * 0.35;
+    const targetX = Math.max(
+      -WORLD_LIMIT + 2,
+      Math.min(
+        WORLD_LIMIT - 2,
+        player.x +
+          Math.sin(player.heading) * player.speed * leadTime +
+          (Math.random() - 0.5) * 2.2
+      )
+    );
+    const targetZ = Math.max(
+      -WORLD_LIMIT + 2,
+      Math.min(
+        WORLD_LIMIT - 2,
+        player.z +
+          Math.cos(player.heading) * player.speed * leadTime +
+          (Math.random() - 0.5) * 2.2
+      )
+    );
+    const flightTime = type.shellFlightTime + (Math.random() - 0.5) * 0.3;
+    const shotRange = Math.hypot(targetX - muzzle.x, targetZ - muzzle.z);
+
+    shells.push({
+      kind: "artillery",
+      owner: "enemy",
+      x: muzzle.x,
+      y: muzzle.y,
+      z: muzzle.z,
+      startX: muzzle.x,
+      startY: muzzle.y,
+      startZ: muzzle.z,
+      targetX,
+      targetZ,
+      elapsed: 0,
+      flightTime,
+      life: flightTime,
+      arcHeight: 4.5 + shotRange * 0.045,
+      blastRadius: type.blastRadius,
+      blastDamage: type.blastDamage,
+      trail: []
+    });
+    tone(66, 0.2, "sawtooth", 0.045, -20);
   }
 
   function circleCollision(x, z, radius, obstacles = rocks) {
@@ -1055,16 +1534,18 @@
   }
 
   function updatePlayer(dt) {
+    const tank = getPlayerTank();
     const forward = keys.has("KeyW") || keys.has("ArrowUp");
     const backward = keys.has("KeyS") || keys.has("ArrowDown");
     const left = keys.has("KeyA") || keys.has("ArrowLeft");
     const right = keys.has("KeyD") || keys.has("ArrowRight");
-    const targetSpeed = forward ? 8.6 : backward ? -5.2 : 0;
-    const response = targetSpeed === 0 ? 5.5 : 3.4;
+    const targetSpeed = forward ? tank.forwardSpeed : backward ? -tank.reverseSpeed : 0;
+    const response = targetSpeed === 0 ? tank.coastResponse : tank.acceleration;
     player.speed += (targetSpeed - player.speed) * Math.min(1, dt * response);
 
     if (left || right) {
-      const turn = (right ? 1 : -1) * dt * (1.25 - Math.min(Math.abs(player.speed), 7) * 0.035);
+      const speedPenalty = Math.min(Math.abs(player.speed), tank.forwardSpeed) * 0.025;
+      const turn = (right ? 1 : -1) * dt * (tank.turnRate - speedPenalty);
       player.heading = normalizeAngle(player.heading + turn);
     }
 
@@ -1146,6 +1627,9 @@
   }
 
   function updateEnemyMovement(enemy, targetHeading, range, dt) {
+    const type = getEnemyType(enemy);
+    if (type.static) return;
+
     enemy.stateTimer -= dt;
     if (range < ENEMY_AI.EMERGENCY_RANGE && enemy.state !== ENEMY_STATE.RETREAT) {
       enemy.state = ENEMY_STATE.RETREAT;
@@ -1164,10 +1648,16 @@
     const moveSpeed = enemy.speed * plan.speedScale;
     const nextX = enemy.x + Math.sin(enemy.heading) * moveSpeed * dt;
     const nextZ = enemy.z + Math.cos(enemy.heading) * moveSpeed * dt;
-    const hitsRock = circleCollision(nextX, nextZ, 1.12);
-    const hitsEnemy = enemies.some((other) =>
-      other !== enemy && Math.hypot(nextX - other.x, nextZ - other.z) < 2.25
-    );
+    const collisionRadius = 1.12 * type.scale;
+    const hitsRock = circleCollision(nextX, nextZ, collisionRadius);
+    const hitsEnemy = enemies.some((other) => {
+      if (other === enemy) return false;
+      const otherRadius = 1.12 * getEnemyType(other).scale;
+      return (
+        Math.hypot(nextX - other.x, nextZ - other.z) <
+        collisionRadius + otherRadius
+      );
+    });
     const staysInWorld =
       Math.abs(nextX) < WORLD_LIMIT - 1 &&
       Math.abs(nextZ) < WORLD_LIMIT - 1;
@@ -1185,19 +1675,23 @@
   }
 
   function updateEnemyTurret(enemy, targetHeading, range, dt) {
+    const type = getEnemyType(enemy);
     enemy.turretHeading = turnTowardAngle(
       enemy.turretHeading,
       targetHeading,
-      ENEMY_AI.TURRET_TURN_RATE * dt
+      type.turretTurnRate * dt
     );
     enemy.reload -= dt;
 
-    if (enemy.reload > 0 || range >= ENEMY_AI.FIRE_RANGE) return;
+    if (enemy.reload > 0 || range >= type.fireRange) return;
 
     const facingError = Math.abs(normalizeAngle(targetHeading - enemy.turretHeading));
-    if (facingError <= ENEMY_AI.FIRE_ALIGNMENT) {
-      fireEnemy(enemy);
-      enemy.reload = Math.max(1.25, 2.8 - player.wave * 0.08) + Math.random() * 1.4;
+    if (facingError <= type.fireAlignment) {
+      if (type.id === "artillery") fireArtillery(enemy);
+      else fireEnemy(enemy);
+      enemy.reload =
+        Math.max(type.reloadMin, type.reloadBase - player.wave * 0.08) +
+        Math.random() * type.reloadJitter;
     }
   }
 
@@ -1214,9 +1708,70 @@
     }
   }
 
+  function damagePlayer(amount, impactX, impactZ, shake = 12) {
+    if (player.invulnerable > 0 || gameOver) return;
+    player.health = Math.max(0, player.health - amount);
+    player.invulnerable = 0.55;
+    flash = 1;
+    screenShake = Math.max(screenShake, shake);
+    burst(impactX, impactZ, COLORS.red, 18);
+    tone(92, 0.25, "sawtooth", 0.08, -45);
+    if (player.health <= 0) endGame();
+  }
+
+  function explodeArtilleryShell(shell) {
+    const blastDistance = Math.hypot(
+      shell.targetX - player.x,
+      shell.targetZ - player.z
+    );
+    burst(shell.targetX, shell.targetZ, COLORS.red, 34);
+    burst(shell.targetX, shell.targetZ, COLORS.amber, 18);
+    createBlastSmoke(shell.targetX, shell.targetZ);
+    screenShake = Math.max(screenShake, Math.max(2, 13 - blastDistance * 0.18));
+    tone(44, 0.48, "sawtooth", 0.095, -12);
+
+    if (blastDistance <= shell.blastRadius) {
+      const falloff = 1 - blastDistance / shell.blastRadius * 0.35;
+      damagePlayer(
+        Math.round(shell.blastDamage * falloff),
+        shell.targetX,
+        shell.targetZ,
+        18
+      );
+    }
+  }
+
+  function updateArtilleryShell(shell, dt) {
+    shell.trailTimer = (shell.trailTimer ?? 0) - dt;
+    if (shell.trailTimer <= 0) {
+      shell.trail.push({ x: shell.x, y: shell.y, z: shell.z });
+      if (shell.trail.length > 14) shell.trail.shift();
+      shell.trailTimer = 0.065;
+    }
+
+    shell.elapsed = Math.min(shell.flightTime, shell.elapsed + dt);
+    shell.life = shell.flightTime - shell.elapsed;
+    const progress = shell.elapsed / shell.flightTime;
+    shell.x = shell.startX + (shell.targetX - shell.startX) * progress;
+    shell.z = shell.startZ + (shell.targetZ - shell.startZ) * progress;
+    shell.y =
+      shell.startY * (1 - progress) +
+      Math.sin(progress * Math.PI) * shell.arcHeight;
+
+    if (progress < 1) return false;
+    explodeArtilleryShell(shell);
+    return true;
+  }
+
   function updateShells(dt) {
     for (let i = shells.length - 1; i >= 0; i -= 1) {
       const shell = shells[i];
+
+      if (shell.kind === "artillery") {
+        if (updateArtilleryShell(shell, dt)) shells.splice(i, 1);
+        continue;
+      }
+
       shell.x += shell.vx * dt;
       shell.z += shell.vz * dt;
       shell.life -= dt;
@@ -1233,16 +1788,20 @@
       }
 
       if (shell.owner === "player") {
-        const enemyIndex = enemies.findIndex((enemy) => Math.hypot(shell.x - enemy.x, shell.z - enemy.z) < 1.45);
+        const enemyIndex = enemies.findIndex((enemy) => {
+          const hitRadius = 1.45 * getEnemyType(enemy).hitRadius;
+          return Math.hypot(shell.x - enemy.x, shell.z - enemy.z) < hitRadius;
+        });
         if (enemyIndex !== -1) {
           const enemy = enemies[enemyIndex];
+          const type = getEnemyType(enemy);
           enemy.health -= 1;
           enemy.hitFlash = 0.14;
           shells.splice(i, 1);
           burst(shell.x, shell.z, COLORS.amber, 10);
           tone(260, 0.07, "square", 0.035, -120);
           if (enemy.health <= 0) {
-            player.score += 100 * player.wave;
+            player.score += type.score * player.wave;
             player.kills += 1;
             burst(enemy.x, enemy.z, COLORS.red, 32);
             screenShake = 9;
@@ -1252,15 +1811,9 @@
             player.score += 25;
           }
         }
-      } else if (player.invulnerable <= 0 && Math.hypot(shell.x - player.x, shell.z - player.z) < 1.2) {
+      } else if (Math.hypot(shell.x - player.x, shell.z - player.z) < 1.2) {
         shells.splice(i, 1);
-        player.health = Math.max(0, player.health - 18);
-        player.invulnerable = 0.55;
-        flash = 1;
-        screenShake = 12;
-        burst(player.x, player.z, COLORS.red, 18);
-        tone(92, 0.25, "sawtooth", 0.08, -45);
-        if (player.health <= 0) endGame();
+        damagePlayer(18, shell.x, shell.z, 12);
       }
     }
   }
@@ -1356,8 +1909,12 @@
     requestAnimationFrame(loop);
   }
 
+  for (const card of tankCards) {
+    card.addEventListener("click", () => selectPlayerTank(card.dataset.tank));
+  }
+  selectPlayerTank(selectedTankId);
   startButton.addEventListener("click", startGame);
-  restartButton.addEventListener("click", startGame);
+  restartButton.addEventListener("click", returnToHangar);
   canvas.addEventListener("click", () => {
     if (!running || paused || gameOver) return;
     initAudio();

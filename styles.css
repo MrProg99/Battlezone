@@ -55,9 +55,11 @@ canvas {
   z-index: 4;
   left: 50%;
   top: 50%;
-  width: min(620px, calc(100% - 40px));
+  width: min(720px, calc(100% - 40px));
+  max-height: calc(100% - 24px);
   transform: translate(-50%, -50%);
-  padding: clamp(24px, 5vw, 48px);
+  overflow-y: auto;
+  padding: clamp(22px, 3vw, 36px);
   border: 1px solid rgba(120, 255, 154, 0.6);
   background: rgba(2, 8, 5, 0.9);
   box-shadow:
@@ -103,19 +105,124 @@ h1 span {
 }
 
 .tagline {
-  margin: 16px 0 28px;
+  margin: 14px 0 20px;
   color: rgba(120, 255, 154, 0.72);
   font-size: 12px;
   letter-spacing: 0.16em;
   text-transform: uppercase;
 }
 
+.tank-select-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin: 0 0 9px;
+  color: var(--amber);
+  font-size: 10px;
+  letter-spacing: 0.11em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.tank-select-heading small {
+  color: rgba(120, 255, 154, 0.4);
+  font-size: 8px;
+  letter-spacing: 0.04em;
+}
+
+.tank-selection {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.tank-card {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 1fr auto;
+  gap: 5px 14px;
+  padding: 11px 14px;
+  border-color: rgba(120, 255, 154, 0.28);
+  background: rgba(5, 22, 11, 0.58);
+  color: rgba(120, 255, 154, 0.62);
+  box-shadow: none;
+  text-align: left;
+}
+
+.tank-card:hover,
+.tank-card:focus-visible {
+  border-color: var(--green);
+  background: rgba(15, 53, 27, 0.72);
+  color: var(--green);
+}
+
+.tank-card.selected {
+  border-color: var(--amber);
+  background:
+    linear-gradient(120deg, rgba(255, 211, 106, 0.1), transparent 58%),
+    rgba(8, 31, 16, 0.82);
+  color: var(--green);
+  box-shadow: inset 3px 0 0 var(--amber);
+}
+
+.tank-card-title {
+  display: flex;
+  min-width: 130px;
+  flex-direction: column;
+  align-self: center;
+}
+
+.tank-card-title strong {
+  color: currentColor;
+  font-size: 15px;
+  letter-spacing: 0.08em;
+}
+
+.tank-card-title em {
+  margin-top: 3px;
+  color: rgba(220, 255, 228, 0.45);
+  font-size: 8px;
+  font-style: normal;
+  letter-spacing: 0.08em;
+}
+
+.tank-icon {
+  width: 105px;
+  height: 39px;
+  color: currentColor;
+  filter: drop-shadow(0 0 4px rgba(120, 255, 154, 0.2));
+}
+
+.tank-icon path {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: square;
+  stroke-linejoin: bevel;
+  stroke-width: 1.5;
+}
+
+.tank-stat {
+  display: flex;
+  justify-content: space-between;
+  border-top: 1px solid rgba(120, 255, 154, 0.12);
+  padding-top: 5px;
+  font-size: 8px;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+}
+
+.tank-stat b {
+  color: var(--amber);
+  font-weight: 700;
+}
+
 .controls {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 9px 24px;
-  margin: 0 auto 30px;
-  padding: 18px;
+  margin: 0 auto 18px;
+  padding: 11px 16px;
   border-top: 1px solid rgba(120, 255, 154, 0.2);
   border-bottom: 1px solid rgba(120, 255, 154, 0.2);
   text-align: left;
@@ -266,6 +373,14 @@ button small {
 }
 
 @media (max-width: 620px) {
+  .tank-select-heading small {
+    display: none;
+  }
+
+  .tank-selection {
+    grid-template-columns: 1fr;
+  }
+
   .controls {
     grid-template-columns: 1fr;
   }

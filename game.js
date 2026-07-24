@@ -1396,50 +1396,158 @@
   }
 
   function drawCockpit() {
-    const baseY = height;
+    const tank = getPlayerTank();
+    const light = tank.id === "scout";
     const midX = width / 2;
+    const movement = Math.min(1, Math.abs(player.speed) / tank.forwardSpeed);
+    const suspension =
+      missionPhase === MISSION_PHASE.COMBAT
+        ? Math.sin(performance.now() * 0.018) * movement * 1.5
+        : 0;
+    const recoilProgress = Math.max(
+      0,
+      Math.min(1, (player.reload - (tank.reloadTime - 0.12)) / 0.12)
+    );
+    const baseY = height + suspension + recoilProgress * 5;
     const dark = "rgba(1, 6, 3, 0.93)";
+    const hullNearHalf = Math.min(
+      light ? 178 : 218,
+      width * (light ? 0.31 : 0.35)
+    );
+    const hullFarHalf = Math.min(
+      light ? 78 : 102,
+      width * (light ? 0.14 : 0.17)
+    );
+    const hullHeight = Math.min(
+      light ? 72 : 88,
+      height * (light ? 0.1 : 0.12)
+    );
+    const noseY = baseY - hullHeight - (light ? 13 : 10);
+    const shoulderY = baseY - hullHeight;
+    const trackNearInner = hullNearHalf + 8;
+    const trackNearOuter = Math.min(
+      midX - 5,
+      trackNearInner + (light ? 58 : 72)
+    );
+    const trackFarInner = hullFarHalf + 9;
+    const trackFarOuter = trackFarInner + (light ? 34 : 45);
+    const trackTopY = shoulderY + (light ? 8 : 5);
+    const grilleHalf = light ? 20 : 30;
 
     ctx.save();
     ctx.fillStyle = dark;
     ctx.strokeStyle = COLORS.dim;
     ctx.lineWidth = 1;
 
+    // Dessus des chenilles, vues en forte perspective.
     ctx.beginPath();
-    ctx.moveTo(0, baseY);
-    ctx.lineTo(0, baseY - 104);
-    ctx.lineTo(width * 0.19, baseY - 86);
-    ctx.lineTo(width * 0.29, baseY);
+    ctx.moveTo(midX - trackFarInner, trackTopY);
+    ctx.lineTo(midX - trackFarOuter, trackTopY + 8);
+    ctx.lineTo(midX - trackNearOuter, baseY);
+    ctx.lineTo(midX - trackNearInner, baseY);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
 
     ctx.beginPath();
-    ctx.moveTo(width, baseY);
-    ctx.lineTo(width, baseY - 104);
-    ctx.lineTo(width * 0.81, baseY - 86);
-    ctx.lineTo(width * 0.71, baseY);
+    ctx.moveTo(midX + trackFarInner, trackTopY);
+    ctx.lineTo(midX + trackFarOuter, trackTopY + 8);
+    ctx.lineTo(midX + trackNearOuter, baseY);
+    ctx.lineTo(midX + trackNearInner, baseY);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
 
+    ctx.globalAlpha = 0.36;
+    for (let i = 1; i <= 3; i += 1) {
+      const ratio = i / 4;
+      const leftInner =
+        midX - trackFarInner + (-trackNearInner + trackFarInner) * ratio;
+      const leftOuter =
+        midX - trackFarOuter + (-trackNearOuter + trackFarOuter) * ratio;
+      const rightInner =
+        midX + trackFarInner + (trackNearInner - trackFarInner) * ratio;
+      const rightOuter =
+        midX + trackFarOuter + (trackNearOuter - trackFarOuter) * ratio;
+      const treadY = trackTopY + (baseY - trackTopY) * ratio;
+
+      ctx.beginPath();
+      ctx.moveTo(leftOuter, treadY + 8 * (1 - ratio));
+      ctx.lineTo(leftInner, treadY);
+      ctx.moveTo(rightInner, treadY);
+      ctx.lineTo(rightOuter, treadY + 8 * (1 - ratio));
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+
+    // Glacis en V : un nez pointu et deux grandes plaques inclinées.
     ctx.beginPath();
-    ctx.moveTo(midX - 130, baseY);
-    ctx.lineTo(midX - 86, baseY - 31);
-    ctx.lineTo(midX + 86, baseY - 31);
-    ctx.lineTo(midX + 130, baseY);
+    ctx.moveTo(midX, noseY);
+    ctx.lineTo(midX + hullFarHalf, shoulderY);
+    ctx.lineTo(midX + hullNearHalf, baseY);
+    ctx.lineTo(midX - hullNearHalf, baseY);
+    ctx.lineTo(midX - hullFarHalf, shoulderY);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
 
     ctx.strokeStyle = COLORS.green;
-    ctx.globalAlpha = 0.52;
+    ctx.globalAlpha = 0.5;
     ctx.beginPath();
-    ctx.moveTo(midX - 19, baseY);
-    ctx.lineTo(midX - 6, baseY - 55);
-    ctx.lineTo(midX + 6, baseY - 55);
-    ctx.lineTo(midX + 19, baseY);
+    ctx.moveTo(midX, noseY);
+    ctx.lineTo(midX, baseY);
+    ctx.moveTo(midX - hullFarHalf, shoulderY);
+    ctx.lineTo(midX, baseY);
+    ctx.moveTo(midX + hullFarHalf, shoulderY);
+    ctx.lineTo(midX, baseY);
     ctx.stroke();
+
+    // Canon vu dans l'axe : le tube converge vers une petite bouche carrée.
+    const barrelBaseY = baseY - (light ? 13 : 16);
+    const barrelEndY = shoulderY - (light ? 72 : 94);
+    const barrelBaseHalf = light ? 8 : 11;
+    const barrelEndHalf = light ? 2.5 : 3.5;
+
+    ctx.fillStyle = dark;
+    ctx.globalAlpha = 1;
+    ctx.beginPath();
+    ctx.moveTo(midX - barrelBaseHalf, barrelBaseY);
+    ctx.lineTo(midX - barrelEndHalf, barrelEndY);
+    ctx.lineTo(midX + barrelEndHalf, barrelEndY);
+    ctx.lineTo(midX + barrelBaseHalf, barrelBaseY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.globalAlpha = 0.72;
+    ctx.strokeRect(
+      midX - barrelEndHalf - 2,
+      barrelEndY - 3,
+      barrelEndHalf * 2 + 4,
+      5
+    );
+
+    // Mantelet technique à la base du canon.
+    const grilleTop = baseY - (light ? 31 : 39);
+    ctx.globalAlpha = 0.62;
+    ctx.beginPath();
+    ctx.moveTo(midX - grilleHalf * 0.62, grilleTop);
+    ctx.lineTo(midX + grilleHalf * 0.62, grilleTop);
+    ctx.lineTo(midX + grilleHalf, baseY - 7);
+    ctx.lineTo(midX - grilleHalf, baseY - 7);
+    ctx.closePath();
+    ctx.stroke();
+    ctx.globalAlpha = 0.28;
+    for (let i = 1; i <= 3; i += 1) {
+      const grilleY = grilleTop + (baseY - 7 - grilleTop) * (i / 4);
+      const grilleWidth =
+        grilleHalf * (0.62 + 0.38 * (i / 4));
+      ctx.beginPath();
+      ctx.moveTo(midX - grilleWidth, grilleY);
+      ctx.lineTo(midX + grilleWidth, grilleY);
+      ctx.stroke();
+    }
+
     ctx.globalAlpha = 1;
     ctx.restore();
   }

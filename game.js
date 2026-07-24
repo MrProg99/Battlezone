@@ -137,6 +137,81 @@
     START_HEIGHT: 38,
     START_PITCH: 0.72
   });
+  const TANK_DEBRIS_SHAPES = Object.freeze({
+    turret: {
+      vertices: [
+        [-0.48, -0.18, -0.34], [0.48, -0.18, -0.34],
+        [0.58, -0.18, 0.3], [-0.58, -0.18, 0.3],
+        [-0.34, 0.2, -0.22], [0.34, 0.2, -0.22],
+        [0.4, 0.2, 0.22], [-0.4, 0.2, 0.22]
+      ],
+      edges: [
+        [0, 1], [1, 2], [2, 3], [3, 0],
+        [4, 5], [5, 6], [6, 7], [7, 4],
+        [0, 4], [1, 5], [2, 6], [3, 7]
+      ]
+    },
+    cannon: {
+      vertices: [
+        [-0.05, -0.05, -0.82], [0.05, -0.05, -0.82],
+        [0.05, -0.05, 0.82], [-0.05, -0.05, 0.82],
+        [-0.05, 0.05, -0.82], [0.05, 0.05, -0.82],
+        [0.05, 0.05, 0.82], [-0.05, 0.05, 0.82]
+      ],
+      edges: [
+        [0, 1], [1, 2], [2, 3], [3, 0],
+        [4, 5], [5, 6], [6, 7], [7, 4],
+        [0, 4], [1, 5], [2, 6], [3, 7]
+      ]
+    },
+    track: {
+      vertices: [
+        [-0.62, -0.12, -0.24], [0.62, -0.12, -0.24],
+        [0.62, -0.12, 0.24], [-0.62, -0.12, 0.24],
+        [-0.52, 0.12, -0.2], [0.52, 0.12, -0.2],
+        [0.52, 0.12, 0.2], [-0.52, 0.12, 0.2]
+      ],
+      edges: [
+        [0, 1], [1, 2], [2, 3], [3, 0],
+        [4, 5], [5, 6], [6, 7], [7, 4],
+        [0, 4], [1, 5], [2, 6], [3, 7],
+        [0, 2], [1, 3]
+      ]
+    },
+    plate: {
+      vertices: [
+        [-0.58, -0.08, -0.34],
+        [0.58, -0.08, -0.28],
+        [0.12, 0.08, 0.48],
+        [-0.18, 0.05, 0.34]
+      ],
+      edges: [[0, 1], [1, 2], [2, 3], [3, 0], [0, 2]]
+    },
+    optic: {
+      vertices: [
+        [-0.16, -0.12, -0.13], [0.16, -0.12, -0.13],
+        [0.16, -0.12, 0.13], [-0.16, -0.12, 0.13],
+        [-0.13, 0.12, -0.1], [0.13, 0.12, -0.1],
+        [0.13, 0.12, 0.1], [-0.13, 0.12, 0.1]
+      ],
+      edges: [
+        [0, 1], [1, 2], [2, 3], [3, 0],
+        [4, 5], [5, 6], [6, 7], [7, 4],
+        [0, 4], [1, 5], [2, 6], [3, 7]
+      ]
+    }
+  });
+  const TANK_DEBRIS_LAYOUT = Object.freeze([
+    { shape: "turret", x: 0, y: 0.92, z: 0.08, lift: 1.5 },
+    { shape: "cannon", x: 0, y: 1.02, z: 1.05, lift: 1.1 },
+    { shape: "track", x: -1.08, y: 0.24, z: 0, lift: 0 },
+    { shape: "track", x: 1.08, y: 0.24, z: 0, lift: 0.15 },
+    { shape: "plate", x: -0.48, y: 0.55, z: 0.52, lift: 0.4 },
+    { shape: "plate", x: 0.48, y: 0.55, z: 0.52, lift: 0.55 },
+    { shape: "plate", x: 0, y: 0.42, z: -0.72, lift: 0.25 },
+    { shape: "optic", x: 0, y: 1.2, z: -0.08, lift: 1.8 }
+  ]);
+  const MAX_TANK_DEBRIS = 80;
   const PLAYER_TANKS = Object.freeze({
     scout: Object.freeze({
       id: "scout",
@@ -212,6 +287,7 @@
   const enemies = [];
   const shells = [];
   const particles = [];
+  const tankDebris = [];
   const rocks = [];
   const remotePlayers = new Map();
   const remoteWorldShells = [];
@@ -526,6 +602,7 @@
     for (let i = enemies.length - 1; i >= 0; i -= 1) {
       if (!incomingEnemyIds.has(Number(enemies[i].id))) {
         if (missionPhase === MISSION_PHASE.COMBAT) {
+          createTankDebris(enemies[i]);
           burst(enemies[i].x, enemies[i].z, COLORS.red, 24);
         }
         enemies.splice(i, 1);
@@ -1313,6 +1390,55 @@
     ctx.globalAlpha = 1;
   }
 
+  function transformDebrisVertex(piece, vertex, rotation) {
+    let x = vertex[0] * piece.scale;
+    let y = vertex[1] * piece.scale;
+    let z = vertex[2] * piece.scale;
+
+    const yawX = x * rotation.yawCos + z * rotation.yawSin;
+    const yawZ = -x * rotation.yawSin + z * rotation.yawCos;
+    x = yawX;
+    z = yawZ;
+
+    const pitchY =
+      y * rotation.pitchCos - z * rotation.pitchSin;
+    const pitchZ =
+      y * rotation.pitchSin + z * rotation.pitchCos;
+    y = pitchY;
+    z = pitchZ;
+
+    const rollX = x * rotation.rollCos - y * rotation.rollSin;
+    const rollY = x * rotation.rollSin + y * rotation.rollCos;
+
+    return {
+      x: piece.x + rollX,
+      y: piece.y + rollY,
+      z: piece.z + z
+    };
+  }
+
+  function drawTankDebris(piece) {
+    const lifeAlpha = Math.max(0, piece.life / piece.maxLife);
+    const appearAlpha = Math.min(1, piece.age / 0.035);
+    const alpha = appearAlpha * Math.pow(lifeAlpha, 0.72);
+    const color = piece.age < 0.075 ? COLORS.white : piece.color;
+    const rotation = {
+      yawCos: Math.cos(piece.yaw),
+      yawSin: Math.sin(piece.yaw),
+      pitchCos: Math.cos(piece.pitch),
+      pitchSin: Math.sin(piece.pitch),
+      rollCos: Math.cos(piece.roll),
+      rollSin: Math.sin(piece.roll)
+    };
+    const vertices = piece.shape.vertices.map((vertex) =>
+      transformDebrisVertex(piece, vertex, rotation)
+    );
+
+    for (const [start, end] of piece.shape.edges) {
+      drawTankEdge(vertices[start], vertices[end], color, alpha, 1.05);
+    }
+  }
+
   function drawReticle() {
     const x = width / 2;
     const y = horizon;
@@ -1910,6 +2036,10 @@
         depth: distance(player, shell),
         draw: () => drawShell(shell)
       })),
+      ...tankDebris.map((piece) => ({
+        depth: distance(player, piece),
+        draw: () => drawTankDebris(piece)
+      })),
       ...particles.map((particle) => ({
         depth: distance(player, particle),
         draw: () => drawParticle(particle)
@@ -2104,6 +2234,7 @@
     shells.length = 0;
     remoteWorldShells.length = 0;
     particles.length = 0;
+    tankDebris.length = 0;
     enemySerial = 0;
     shellSerial = 0;
     const coopSpawnX =
@@ -2249,6 +2380,61 @@
         size: 18 + Math.random() * 35,
         color
       });
+    }
+  }
+
+  function createTankDebris(enemy) {
+    const type = getEnemyType(enemy);
+    const typeSeed =
+      type.id === "artillery"
+        ? 0x7f4a7c15
+        : type.id === "light"
+          ? 0x4cf5ad43
+          : 0x2c9277b5;
+    const seed =
+      ((Number(enemy.id) || 1) * 0x9e3779b1 ^ typeSeed) >>> 0;
+    const random = seededRandom(seed || 1);
+    const headingCos = Math.cos(enemy.heading);
+    const headingSin = Math.sin(enemy.heading);
+    const color = type.priority ? COLORS.amber : COLORS.red;
+
+    for (const layout of TANK_DEBRIS_LAYOUT) {
+      const scale = type.scale * (0.9 + random() * 0.22);
+      const localX = layout.x * type.scale;
+      const localZ = layout.z * type.scale;
+      const launchAngle = random() * TAU;
+      const launchSpeed = 1.6 + random() * 2.8;
+      const velocityX =
+        layout.x * 1.35 + Math.sin(launchAngle) * launchSpeed;
+      const velocityZ =
+        layout.z * 1.35 + Math.cos(launchAngle) * launchSpeed;
+      const life = 1.3 + random() * 0.55;
+
+      tankDebris.push({
+        x: enemy.x + localX * headingCos + localZ * headingSin,
+        y: layout.y * type.scale,
+        z: enemy.z - localX * headingSin + localZ * headingCos,
+        vx: velocityX * headingCos + velocityZ * headingSin,
+        vy: 3.1 + layout.lift + random() * 3.4,
+        vz: -velocityX * headingSin + velocityZ * headingCos,
+        yaw: enemy.heading + (random() - 0.5) * 0.5,
+        pitch: (random() - 0.5) * 0.8,
+        roll: (random() - 0.5) * 0.8,
+        spinYaw: (random() - 0.5) * 6.5,
+        spinPitch: (random() - 0.5) * 7.5,
+        spinRoll: (random() - 0.5) * 7.5,
+        shape: TANK_DEBRIS_SHAPES[layout.shape],
+        scale,
+        color,
+        age: 0,
+        life,
+        maxLife: life,
+        bounced: false
+      });
+    }
+
+    if (tankDebris.length > MAX_TANK_DEBRIS) {
+      tankDebris.splice(0, tankDebris.length - MAX_TANK_DEBRIS);
     }
   }
 
@@ -2456,6 +2642,120 @@
     );
   }
 
+  function resolveSlidingMovement(
+    x,
+    z,
+    moveX,
+    moveZ,
+    radius,
+    movingObstacles = null,
+    ignoredObstacle = null
+  ) {
+    const requestedDistance = Math.hypot(moveX, moveZ);
+    const worldEdge = WORLD_LIMIT - Math.max(1, radius);
+    let nextX = x + moveX;
+    let nextZ = z + moveZ;
+    let collided = false;
+    let collisionSeverity = 0;
+
+    const recordContact = (normalX, normalZ) => {
+      collided = true;
+      if (requestedDistance <= 0.0001) return;
+      const inwardSpeed =
+        -(moveX * normalX + moveZ * normalZ) / requestedDistance;
+      collisionSeverity = Math.max(
+        collisionSeverity,
+        Math.max(0, Math.min(1, inwardSpeed))
+      );
+    };
+
+    if (nextX > worldEdge) {
+      nextX = worldEdge;
+      recordContact(-1, 0);
+    } else if (nextX < -worldEdge) {
+      nextX = -worldEdge;
+      recordContact(1, 0);
+    }
+    if (nextZ > worldEdge) {
+      nextZ = worldEdge;
+      recordContact(0, -1);
+    } else if (nextZ < -worldEdge) {
+      nextZ = -worldEdge;
+      recordContact(0, 1);
+    }
+
+    const pushOutside = (obstacle, obstacleRadius) => {
+      const minimumDistance = radius + obstacleRadius;
+      let offsetX = nextX - obstacle.x;
+      let offsetZ = nextZ - obstacle.z;
+      const obstacleDistance = Math.hypot(offsetX, offsetZ);
+      if (obstacleDistance >= minimumDistance) return false;
+      let normalDistance = obstacleDistance;
+
+      if (normalDistance < 0.0001) {
+        offsetX = x - obstacle.x;
+        offsetZ = z - obstacle.z;
+        normalDistance = Math.hypot(offsetX, offsetZ);
+      }
+      if (normalDistance < 0.0001 && requestedDistance > 0.0001) {
+        offsetX = -moveX;
+        offsetZ = -moveZ;
+        normalDistance = requestedDistance;
+      }
+      if (normalDistance < 0.0001) {
+        offsetX = 1;
+        offsetZ = 0;
+        normalDistance = 1;
+      }
+
+      const normalX = offsetX / normalDistance;
+      const normalZ = offsetZ / normalDistance;
+      const correction = minimumDistance - obstacleDistance + 0.001;
+      nextX += normalX * correction;
+      nextZ += normalZ * correction;
+      recordContact(normalX, normalZ);
+      return true;
+    };
+
+    // Quelques passes suffisent pour les coins formés par plusieurs obstacles.
+    for (let pass = 0; pass < 4; pass += 1) {
+      let corrected = false;
+      for (const rock of rocks) {
+        corrected =
+          pushOutside(rock, rock.radius * 0.78) || corrected;
+      }
+      if (movingObstacles) {
+        for (const obstacle of movingObstacles) {
+          if (obstacle === ignoredObstacle) continue;
+          const obstacleType = getEnemyType(obstacle);
+          corrected =
+            pushOutside(obstacle, 1.12 * obstacleType.scale) ||
+            corrected;
+        }
+      }
+
+      const clampedX = Math.max(-worldEdge, Math.min(worldEdge, nextX));
+      const clampedZ = Math.max(-worldEdge, Math.min(worldEdge, nextZ));
+      corrected =
+        corrected || clampedX !== nextX || clampedZ !== nextZ;
+      nextX = clampedX;
+      nextZ = clampedZ;
+      if (!corrected) break;
+    }
+
+    const travelledDistance = Math.hypot(nextX - x, nextZ - z);
+    return {
+      x: nextX,
+      z: nextZ,
+      collided,
+      collisionSeverity,
+      travelRatio:
+        requestedDistance > 0.0001
+          ? Math.min(1, travelledDistance / requestedDistance)
+          : 0
+    };
+  }
+
   function updatePlayer(dt) {
     const tank = getPlayerTank();
     const forward = keys.has("KeyW") || keys.has("ArrowUp");
@@ -2490,17 +2790,19 @@
     }
     turretWasAligned = turretAligned;
 
-    const nextX = player.x + Math.sin(player.heading) * player.speed * dt;
-    const nextZ = player.z + Math.cos(player.heading) * player.speed * dt;
-    if (
-      Math.abs(nextX) < WORLD_LIMIT - 1 &&
-      Math.abs(nextZ) < WORLD_LIMIT - 1 &&
-      !circleCollision(nextX, nextZ, 1.05)
-    ) {
-      player.x = nextX;
-      player.z = nextZ;
-    } else {
-      player.speed *= -0.18;
+    const movement = resolveSlidingMovement(
+      player.x,
+      player.z,
+      Math.sin(player.heading) * player.speed * dt,
+      Math.cos(player.heading) * player.speed * dt,
+      1.05
+    );
+    player.x = movement.x;
+    player.z = movement.z;
+    if (movement.collided) {
+      const surfaceFriction =
+        0.985 - 0.235 * movement.collisionSeverity ** 2;
+      player.speed *= surfaceFriction;
     }
 
     player.reload = Math.max(0, player.reload - dt);
@@ -2569,27 +2871,42 @@
     );
 
     const moveSpeed = enemy.speed * plan.speedScale;
-    const nextX = enemy.x + Math.sin(enemy.heading) * moveSpeed * dt;
-    const nextZ = enemy.z + Math.cos(enemy.heading) * moveSpeed * dt;
     const collisionRadius = 1.12 * type.scale;
-    const hitsRock = circleCollision(nextX, nextZ, collisionRadius);
-    const hitsEnemy = enemies.some((other) => {
-      if (other === enemy) return false;
-      const otherRadius = 1.12 * getEnemyType(other).scale;
-      return (
-        Math.hypot(nextX - other.x, nextZ - other.z) <
-        collisionRadius + otherRadius
-      );
-    });
-    const staysInWorld =
-      Math.abs(nextX) < WORLD_LIMIT - 1 &&
-      Math.abs(nextZ) < WORLD_LIMIT - 1;
+    const startX = enemy.x;
+    const startZ = enemy.z;
+    const movement = resolveSlidingMovement(
+      enemy.x,
+      enemy.z,
+      Math.sin(enemy.heading) * moveSpeed * dt,
+      Math.cos(enemy.heading) * moveSpeed * dt,
+      collisionRadius,
+      enemies,
+      enemy
+    );
+    enemy.x = movement.x;
+    enemy.z = movement.z;
 
-    if (!hitsRock && !hitsEnemy && staysInWorld) {
-      enemy.x = nextX;
-      enemy.z = nextZ;
+    if (!movement.collided) {
       return;
     }
+
+    const slideX = enemy.x - startX;
+    const slideZ = enemy.z - startZ;
+    if (Math.hypot(slideX, slideZ) > 0.0001) {
+      const slideHeading = Math.atan2(slideX, slideZ);
+      enemy.heading = turnTowardAngle(
+        enemy.heading,
+        slideHeading,
+        ENEMY_AI.CHASSIS_TURN_RATE * dt * 1.35
+      );
+    }
+
+    // Un contact oblique continue naturellement; un choc frontal déclenche
+    // une nouvelle décision afin que l'ennemi ne pousse pas sur place.
+    if (
+      movement.collisionSeverity < 0.32 &&
+      movement.travelRatio > 0.55
+    ) return;
 
     if (enemy.state !== ENEMY_STATE.REPOSITION) enemy.strafeDirection *= -1;
     enemy.state = ENEMY_STATE.REPOSITION;
@@ -2892,6 +3209,7 @@
           if (enemy.health <= 0) {
             player.score += type.score * player.wave;
             player.kills += 1;
+            createTankDebris(enemy);
             burst(enemy.x, enemy.z, COLORS.red, 32);
             screenShake = 9;
             tone(58, 0.34, "sawtooth", 0.08, -20);
@@ -2935,6 +3253,49 @@
     }
   }
 
+  function updateTankDebris(dt) {
+    for (let i = tankDebris.length - 1; i >= 0; i -= 1) {
+      const piece = tankDebris[i];
+      piece.age += dt;
+      piece.life -= dt;
+      piece.x += piece.vx * dt;
+      piece.y += piece.vy * dt;
+      piece.z += piece.vz * dt;
+      piece.vy -= 8.8 * dt;
+      piece.yaw += piece.spinYaw * dt;
+      piece.pitch += piece.spinPitch * dt;
+      piece.roll += piece.spinRoll * dt;
+
+      const airDamping = Math.exp(-0.12 * dt);
+      piece.vx *= airDamping;
+      piece.vz *= airDamping;
+
+      const groundHeight = 0.13 * piece.scale;
+      if (piece.y <= groundHeight && piece.vy < 0) {
+        piece.y = groundHeight;
+        if (!piece.bounced) {
+          piece.bounced = true;
+          piece.vy *= -0.28;
+          piece.vx *= 0.68;
+          piece.vz *= 0.68;
+          piece.spinYaw *= 0.7;
+          piece.spinPitch *= 0.7;
+          piece.spinRoll *= 0.7;
+        } else {
+          piece.vy = 0;
+          const groundDamping = Math.exp(-5.5 * dt);
+          piece.vx *= groundDamping;
+          piece.vz *= groundDamping;
+          piece.spinYaw *= groundDamping;
+          piece.spinPitch *= groundDamping;
+          piece.spinRoll *= groundDamping;
+        }
+      }
+
+      if (piece.life <= 0) tankDebris.splice(i, 1);
+    }
+  }
+
   function finishDropSequence() {
     player.altitude = 0;
     cameraPitch = 0;
@@ -2970,6 +3331,7 @@
     if (missionPhase === MISSION_PHASE.DROP) {
       updateDropSequence(dt);
       updateParticles(dt);
+      updateTankDebris(dt);
       updateScreenEffects(dt);
       updateRemotePlayers(dt);
       updateReplicatedWorld(dt);
@@ -2984,6 +3346,7 @@
     if (isWorldAuthority()) updateEnemies(dt);
     updateShells(dt);
     updateParticles(dt);
+    updateTankDebris(dt);
     updateScreenEffects(dt);
     waveBanner = Math.max(0, waveBanner - dt);
 

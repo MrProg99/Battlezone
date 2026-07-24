@@ -908,59 +908,146 @@
     }
   }
 
+  function drawTankEdge(a, b, color, fade, lineWidth = 1.25) {
+    line3d(a, b, color, lineWidth + 2.2, fade * 0.12);
+    line3d(a, b, color, lineWidth, fade);
+  }
+
+  function buildTankVertices(origin, angle, scale, vertices) {
+    return vertices.map(([x, y, z]) =>
+      orientedPoint(origin, x * scale, y * scale, z * scale, angle)
+    );
+  }
+
+  function drawTankEdges(points, edges, color, fade, lineWidth = 1.25) {
+    for (const [a, b] of edges) {
+      drawTankEdge(points[a], points[b], color, fade, lineWidth);
+    }
+  }
+
   function drawMobileEnemy(enemy, type, color, fade) {
     const scale = type.scale;
-    drawBox(
-      enemy,
-      [0.95 * scale, 0.42 * scale, 1.25 * scale],
-      enemy.heading,
-      color,
-      fade
-    );
+    const light = type.id === "light";
+    const hull = buildTankVertices(enemy, enemy.heading, scale, [
+      [-1.03, 0.08, -1.18],
+      [1.03, 0.08, -1.18],
+      [1.14, 0.08, 1.16],
+      [-1.14, 0.08, 1.16],
+      [-1.38, 0.34, -0.78],
+      [1.38, 0.34, -0.78],
+      [1.02, 0.46, 1.34],
+      [-1.02, 0.46, 1.34],
+      [-0.72, 0.77, -0.5],
+      [0.72, 0.77, -0.5],
+      [0.58, 0.73, 0.62],
+      [-0.58, 0.73, 0.62]
+    ]);
+    drawTankEdges(hull, [
+      [0, 1], [1, 2], [2, 3], [3, 0],
+      [4, 5], [5, 6], [6, 7], [7, 4],
+      [0, 4], [1, 5], [2, 6], [3, 7],
+      [4, 8], [5, 9], [6, 10], [7, 11],
+      [8, 9], [9, 10], [10, 11], [11, 8],
+      [4, 10], [5, 11], [7, 10]
+    ], color, fade);
 
-    const turretOrigin = orientedPoint(enemy, 0, 0, 0.08 * scale, enemy.heading);
-    drawBox(
-      turretOrigin,
-      [0.58 * scale, 0.75 * scale, 0.62 * scale],
-      enemy.turretHeading,
-      color,
-      fade
-    );
+    const leftTrack = buildTankVertices(enemy, enemy.heading, scale, [
+      [-1.31, 0.08, -1.05],
+      [-1.43, 0.18, -0.68],
+      [-1.34, 0.28, 0.98],
+      [-1.08, 0.09, 1.29],
+      [-0.92, 0.03, 0.88],
+      [-0.94, 0.03, -0.88]
+    ]);
+    const rightTrack = buildTankVertices(enemy, enemy.heading, scale, [
+      [1.31, 0.08, -1.05],
+      [1.43, 0.18, -0.68],
+      [1.34, 0.28, 0.98],
+      [1.08, 0.09, 1.29],
+      [0.92, 0.03, 0.88],
+      [0.94, 0.03, -0.88]
+    ]);
+    const trackEdges = [
+      [0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 0],
+      [0, 3], [1, 4]
+    ];
+    drawTankEdges(leftTrack, trackEdges, color, fade, 1.4);
+    drawTankEdges(rightTrack, trackEdges, color, fade, 1.4);
 
-    const barrelY = 0.56 * scale;
-    const barrelStart = orientedPoint(
+    const turretHeight = light ? 0.98 : 1.08;
+    const turret = buildTankVertices(enemy, enemy.turretHeading, scale, [
+      [-0.62, 0.72, -0.42],
+      [0.62, 0.72, -0.42],
+      [0.74, 0.72, 0.28],
+      [0.42, 0.72, 0.68],
+      [-0.42, 0.72, 0.68],
+      [-0.74, 0.72, 0.28],
+      [-0.43, turretHeight, -0.25],
+      [0.43, turretHeight, -0.25],
+      [0.5, turretHeight, 0.3],
+      [0.3, turretHeight, 0.5],
+      [-0.3, turretHeight, 0.5],
+      [-0.5, turretHeight, 0.3]
+    ]);
+    drawTankEdges(turret, [
+      [0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 0],
+      [6, 7], [7, 8], [8, 9], [9, 10], [10, 11], [11, 6],
+      [0, 6], [1, 7], [2, 8], [3, 9], [4, 10], [5, 11],
+      [0, 8], [1, 11]
+    ], color, fade);
+
+    const barrelY = (light ? 0.88 : 0.96) * scale;
+    const barrelWidth = (light ? 0.045 : 0.065) * scale;
+    const barrelLength = (light ? 2.3 : 2.65) * scale;
+    const barrelStartLeft = orientedPoint(
       enemy,
-      0,
+      -barrelWidth,
       barrelY,
-      0.55 * scale,
+      0.5 * scale,
       enemy.turretHeading
     );
-    const barrelEnd = orientedPoint(
+    const barrelStartRight = orientedPoint(
       enemy,
-      0,
+      barrelWidth,
       barrelY,
-      2.05 * scale,
+      0.5 * scale,
       enemy.turretHeading
     );
-    line3d(barrelStart, barrelEnd, color, type.id === "light" ? 1.3 : 2, fade);
+    const barrelEndLeft = orientedPoint(
+      enemy,
+      -barrelWidth,
+      barrelY,
+      barrelLength,
+      enemy.turretHeading
+    );
+    const barrelEndRight = orientedPoint(
+      enemy,
+      barrelWidth,
+      barrelY,
+      barrelLength,
+      enemy.turretHeading
+    );
+    drawTankEdge(barrelStartLeft, barrelEndLeft, color, fade, light ? 1 : 1.45);
+    drawTankEdge(barrelStartRight, barrelEndRight, color, fade, light ? 1 : 1.45);
+    drawTankEdge(barrelEndLeft, barrelEndRight, color, fade, 1);
 
-    const trackOffset = 1.08 * scale;
-    const trackLength = 1.22 * scale;
-    const trackY = 0.12 * scale;
-    line3d(
-      orientedPoint(enemy, -trackOffset, trackY, -trackLength, enemy.heading),
-      orientedPoint(enemy, -trackOffset, trackY, trackLength, enemy.heading),
-      color,
-      2,
-      fade
-    );
-    line3d(
-      orientedPoint(enemy, trackOffset, trackY, -trackLength, enemy.heading),
-      orientedPoint(enemy, trackOffset, trackY, trackLength, enemy.heading),
-      color,
-      2,
-      fade
-    );
+    const opticBottom = turretHeight + 0.03;
+    const opticTop = opticBottom + (light ? 0.15 : 0.19);
+    const optic = buildTankVertices(enemy, enemy.turretHeading, scale, [
+      [-0.18, opticBottom, -0.17],
+      [0.18, opticBottom, -0.17],
+      [0.18, opticBottom, 0.09],
+      [-0.18, opticBottom, 0.09],
+      [-0.16, opticTop, -0.15],
+      [0.16, opticTop, -0.15],
+      [0.16, opticTop, 0.07],
+      [-0.16, opticTop, 0.07]
+    ]);
+    drawTankEdges(optic, [
+      [0, 1], [1, 2], [2, 3], [3, 0],
+      [4, 5], [5, 6], [6, 7], [7, 4],
+      [0, 4], [1, 5], [2, 6], [3, 7]
+    ], color, fade, 1);
   }
 
   function drawArtilleryEnemy(enemy, color, fade) {

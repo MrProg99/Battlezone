@@ -1422,7 +1422,6 @@
       light ? 72 : 88,
       height * (light ? 0.1 : 0.12)
     );
-    const noseY = baseY - hullHeight - (light ? 13 : 10);
     const shoulderY = baseY - hullHeight;
     const trackNearInner = hullNearHalf + 8;
     const trackNearOuter = Math.min(
@@ -1431,8 +1430,36 @@
     );
     const trackFarInner = hullFarHalf + 9;
     const trackFarOuter = trackFarInner + (light ? 34 : 45);
-    const trackTopY = shoulderY + (light ? 8 : 5);
     const grilleHalf = light ? 20 : 30;
+    const chassisYaw = -player.turretOffset;
+    const chassisCos = Math.cos(chassisYaw);
+    const chassisSin = Math.sin(chassisYaw);
+    const depthScale = light ? 0.31 : 0.34;
+    const hullShoulderDepth = hullHeight / depthScale;
+    const hullNoseDepth =
+      (hullHeight + (light ? 13 : 10)) / depthScale;
+    const trackFrontDepth =
+      (hullHeight - (light ? 8 : 5)) / depthScale;
+    const chassisPoint = (localX, localDepth) => {
+      const rotatedX =
+        localX * chassisCos + localDepth * chassisSin;
+      const rotatedDepth =
+        -localX * chassisSin + localDepth * chassisCos;
+      return {
+        x: midX + rotatedX,
+        y: baseY - rotatedDepth * depthScale
+      };
+    };
+    const drawChassisPolygon = (points) => {
+      ctx.beginPath();
+      ctx.moveTo(points[0].x, points[0].y);
+      for (let i = 1; i < points.length; i += 1) {
+        ctx.lineTo(points[i].x, points[i].y);
+      }
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    };
 
     ctx.save();
     ctx.fillStyle = dark;
@@ -1440,66 +1467,83 @@
     ctx.lineWidth = 1;
 
     // Dessus des chenilles, vues en forte perspective.
-    ctx.beginPath();
-    ctx.moveTo(midX - trackFarInner, trackTopY);
-    ctx.lineTo(midX - trackFarOuter, trackTopY + 8);
-    ctx.lineTo(midX - trackNearOuter, baseY);
-    ctx.lineTo(midX - trackNearInner, baseY);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.moveTo(midX + trackFarInner, trackTopY);
-    ctx.lineTo(midX + trackFarOuter, trackTopY + 8);
-    ctx.lineTo(midX + trackNearOuter, baseY);
-    ctx.lineTo(midX + trackNearInner, baseY);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
+    drawChassisPolygon([
+      chassisPoint(-trackFarInner, trackFrontDepth),
+      chassisPoint(-trackFarOuter, trackFrontDepth),
+      chassisPoint(-trackNearOuter, 0),
+      chassisPoint(-trackNearInner, 0)
+    ]);
+    drawChassisPolygon([
+      chassisPoint(trackFarInner, trackFrontDepth),
+      chassisPoint(trackFarOuter, trackFrontDepth),
+      chassisPoint(trackNearOuter, 0),
+      chassisPoint(trackNearInner, 0)
+    ]);
 
     ctx.globalAlpha = 0.36;
     for (let i = 1; i <= 3; i += 1) {
       const ratio = i / 4;
-      const leftInner =
-        midX - trackFarInner + (-trackNearInner + trackFarInner) * ratio;
-      const leftOuter =
-        midX - trackFarOuter + (-trackNearOuter + trackFarOuter) * ratio;
-      const rightInner =
-        midX + trackFarInner + (trackNearInner - trackFarInner) * ratio;
-      const rightOuter =
-        midX + trackFarOuter + (trackNearOuter - trackFarOuter) * ratio;
-      const treadY = trackTopY + (baseY - trackTopY) * ratio;
+      const treadDepth = trackFrontDepth * (1 - ratio);
+      const leftInner = chassisPoint(
+        -trackFarInner +
+          (-trackNearInner + trackFarInner) * ratio,
+        treadDepth
+      );
+      const leftOuter = chassisPoint(
+        -trackFarOuter +
+          (-trackNearOuter + trackFarOuter) * ratio,
+        treadDepth
+      );
+      const rightInner = chassisPoint(
+        trackFarInner +
+          (trackNearInner - trackFarInner) * ratio,
+        treadDepth
+      );
+      const rightOuter = chassisPoint(
+        trackFarOuter +
+          (trackNearOuter - trackFarOuter) * ratio,
+        treadDepth
+      );
 
       ctx.beginPath();
-      ctx.moveTo(leftOuter, treadY + 8 * (1 - ratio));
-      ctx.lineTo(leftInner, treadY);
-      ctx.moveTo(rightInner, treadY);
-      ctx.lineTo(rightOuter, treadY + 8 * (1 - ratio));
+      ctx.moveTo(leftOuter.x, leftOuter.y);
+      ctx.lineTo(leftInner.x, leftInner.y);
+      ctx.moveTo(rightInner.x, rightInner.y);
+      ctx.lineTo(rightOuter.x, rightOuter.y);
       ctx.stroke();
     }
     ctx.globalAlpha = 1;
 
     // Glacis en V : un nez pointu et deux grandes plaques inclinées.
-    ctx.beginPath();
-    ctx.moveTo(midX, noseY);
-    ctx.lineTo(midX + hullFarHalf, shoulderY);
-    ctx.lineTo(midX + hullNearHalf, baseY);
-    ctx.lineTo(midX - hullNearHalf, baseY);
-    ctx.lineTo(midX - hullFarHalf, shoulderY);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
+    const hullNose = chassisPoint(0, hullNoseDepth);
+    const hullRightShoulder = chassisPoint(
+      hullFarHalf,
+      hullShoulderDepth
+    );
+    const hullRightRear = chassisPoint(hullNearHalf, 0);
+    const hullLeftRear = chassisPoint(-hullNearHalf, 0);
+    const hullLeftShoulder = chassisPoint(
+      -hullFarHalf,
+      hullShoulderDepth
+    );
+    const hullRearCenter = chassisPoint(0, 0);
+    drawChassisPolygon([
+      hullNose,
+      hullRightShoulder,
+      hullRightRear,
+      hullLeftRear,
+      hullLeftShoulder
+    ]);
 
     ctx.strokeStyle = COLORS.green;
     ctx.globalAlpha = 0.5;
     ctx.beginPath();
-    ctx.moveTo(midX, noseY);
-    ctx.lineTo(midX, baseY);
-    ctx.moveTo(midX - hullFarHalf, shoulderY);
-    ctx.lineTo(midX, baseY);
-    ctx.moveTo(midX + hullFarHalf, shoulderY);
-    ctx.lineTo(midX, baseY);
+    ctx.moveTo(hullNose.x, hullNose.y);
+    ctx.lineTo(hullRearCenter.x, hullRearCenter.y);
+    ctx.moveTo(hullLeftShoulder.x, hullLeftShoulder.y);
+    ctx.lineTo(hullRearCenter.x, hullRearCenter.y);
+    ctx.moveTo(hullRightShoulder.x, hullRightShoulder.y);
+    ctx.lineTo(hullRearCenter.x, hullRearCenter.y);
     ctx.stroke();
 
     // Canon vu dans l'axe : le tube converge vers une petite bouche carrée.

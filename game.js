@@ -57,6 +57,10 @@
   });
   const GUARDIAN_SHIELD_RADIUS = 16;
   const GUARDIAN_SHIELD_RECHARGE = 3.2;
+  const KAMIKAZE_TRIGGER_RADIUS = 3.2;
+  const KAMIKAZE_BLAST_RADIUS = 7;
+  const KAMIKAZE_BLAST_DAMAGE = 52;
+  const KAMIKAZE_FUSE_TIME = 0.8;
   const ENEMY_TYPES = Object.freeze({
     assault: Object.freeze({
       id: "assault",
@@ -151,6 +155,32 @@
       static: false,
       priority: false,
       stealth: true
+    }),
+    kamikaze: Object.freeze({
+      id: "kamikaze",
+      label: "KAMIKAZE",
+      code: "K",
+      health: 1,
+      speed: 4.35,
+      speedVariance: 0.45,
+      preferredRangeMin: 0,
+      preferredRangeMax: 0,
+      scale: 0.74,
+      hitRadius: 0.8,
+      chassisTurnRate: 1.9,
+      turretTurnRate: 0,
+      fireRange: 0,
+      fireAlignment: 0,
+      reloadBase: 99,
+      reloadMin: 99,
+      reloadJitter: 0,
+      shellSpeed: 0,
+      shellLifetime: 0,
+      score: 190,
+      static: false,
+      priority: false,
+      support: true,
+      kamikaze: true
     }),
     artillery: Object.freeze({
       id: "artillery",
@@ -349,6 +379,7 @@
     host: 0,
     guest: 0
   };
+  let kamikazeWarningTimer = 0;
 
   const player = {
     tankId: selectedTankId,
@@ -652,14 +683,18 @@
     for (let i = enemies.length - 1; i >= 0; i -= 1) {
       if (!incomingEnemyIds.has(Number(enemies[i].id))) {
         if (missionPhase === MISSION_PHASE.COMBAT) {
-          createTankDebris(enemies[i]);
           const removedType = getEnemyType(enemies[i]);
-          burst(
-            enemies[i].x,
-            enemies[i].z,
-            removedType.priority ? COLORS.amber : COLORS.red,
-            24
-          );
+          if (removedType.kamikaze) {
+            createKamikazeExplosionEffects(enemies[i]);
+          } else {
+            createTankDebris(enemies[i]);
+            burst(
+              enemies[i].x,
+              enemies[i].z,
+              removedType.priority ? COLORS.amber : COLORS.red,
+              24
+            );
+          }
         }
         enemies.splice(i, 1);
       }
@@ -682,7 +717,10 @@
         shieldCharge: Number(snapshot.shieldCharge) || 0,
         shieldCooldown: Number(snapshot.shieldCooldown) || 0,
         revealTimer: Number(snapshot.revealTimer) || 0,
-        revealDuration: Number(snapshot.revealDuration) || 2.4
+        revealDuration: Number(snapshot.revealDuration) || 2.4,
+        kamikazeArmed: Boolean(snapshot.kamikazeArmed),
+        fuseTimer: Math.max(0, Number(snapshot.fuseTimer) || 0),
+        fuseDuration: Number(snapshot.fuseDuration) || KAMIKAZE_FUSE_TIME
       };
       if (!enemy) {
         enemy = {
@@ -703,6 +741,11 @@
           enemy.revealTimer = target.revealTimer;
           enemy.revealDuration = target.revealDuration;
           enemy.revealFlash = 0.13;
+        }
+        if (target.kamikazeArmed && !enemy.kamikazeArmed) {
+          enemy.kamikazeArmed = true;
+          enemy.fuseTimer = target.fuseTimer;
+          enemy.fuseDuration = target.fuseDuration;
         }
         enemy.networkTarget = target;
       }
@@ -776,6 +819,19 @@
       enemy.shieldFlash = Math.max(0, (enemy.shieldFlash ?? 0) - dt);
       enemy.revealTimer = Math.max(0, (enemy.revealTimer ?? 0) - dt);
       enemy.revealFlash = Math.max(0, (enemy.revealFlash ?? 0) - dt);
+      enemy.kamikazeArmed = Boolean(target.kamikazeArmed);
+      enemy.fuseDuration = target.fuseDuration || KAMIKAZE_FUSE_TIME;
+      enemy.fuseTimer = enemy.kamikazeArmed
+        ? Math.max(
+            0,
+            Math.min(
+              Number.isFinite(enemy.fuseTimer)
+                ? enemy.fuseTimer
+                : target.fuseTimer,
+              target.fuseTimer
+            ) - dt
+          )
+        : 0;
     }
     for (const shell of remoteWorldShells) {
       const target = shell.networkTarget;
@@ -813,7 +869,12 @@
         shieldCharge: Number(enemy.shieldCharge) || 0,
         shieldCooldown: Number((enemy.shieldCooldown ?? 0).toFixed(3)),
         revealTimer: Number((enemy.revealTimer ?? 0).toFixed(3)),
-        revealDuration: Number((enemy.revealDuration ?? 2.4).toFixed(3))
+        revealDuration: Number((enemy.revealDuration ?? 2.4).toFixed(3)),
+        kamikazeArmed: Boolean(enemy.kamikazeArmed),
+        fuseTimer: Number((enemy.fuseTimer ?? 0).toFixed(3)),
+        fuseDuration: Number(
+          (enemy.fuseDuration ?? KAMIKAZE_FUSE_TIME).toFixed(3)
+        )
       };
     }
 
@@ -1091,7 +1152,8 @@
 
   function drawMobileEnemy(enemy, type, color, fade) {
     const scale = type.scale;
-    const light = type.id === "light" || type.id === "ghost";
+    const light =
+      type.id === "light" || type.id === "ghost" || type.kamikaze;
     const hull = buildTankVertices(enemy, enemy.heading, scale, [
       [-1.03, 0.08, -1.18],
       [1.03, 0.08, -1.18],
@@ -1226,6 +1288,77 @@
       [4, 5], [5, 6], [6, 7], [7, 4],
       [0, 4], [1, 5], [2, 6], [3, 7]
     ], color, fade, 1);
+  }
+
+  function drawKamikazeEnemy(enemy, type, color, fade) {
+    drawMobileEnemy(enemy, type, color, fade);
+
+    const scale = type.scale;
+    const armed = Boolean(enemy.kamikazeArmed);
+    const fuseProgress = armed
+      ? Math.max(
+          0,
+          Math.min(
+            1,
+            enemy.fuseTimer /
+              (enemy.fuseDuration || KAMIKAZE_FUSE_TIME)
+          )
+        )
+      : 1;
+    const pulseSpeed = armed ? 0.018 + (1 - fuseProgress) * 0.035 : 0.008;
+    const pulse =
+      0.7 + Math.sin(performance.now() * pulseSpeed + enemy.id) * 0.28;
+    const warningColor = armed ? COLORS.amber : COLORS.red;
+
+    const core = buildTankVertices(enemy, enemy.heading, scale, [
+      [-0.5, 1.02, -0.1],
+      [0, 1.02, 0.4],
+      [0.5, 1.02, -0.1],
+      [0, 1.02, -0.6],
+      [0, 1.5, -0.1],
+      [0, 0.69, -0.1]
+    ]);
+    for (let i = 0; i < 4; i += 1) {
+      drawTankEdge(core[i], core[(i + 1) % 4], warningColor, fade * pulse, 1.4);
+      drawTankEdge(core[i], core[4], warningColor, fade * pulse, 1.25);
+      drawTankEdge(core[i], core[5], warningColor, fade * pulse, 1.1);
+    }
+
+    const ram = buildTankVertices(enemy, enemy.heading, scale, [
+      [-0.92, 0.28, 0.78],
+      [-0.48, 0.2, 2.08],
+      [0, 0.36, 1.38],
+      [0.92, 0.28, 0.78],
+      [0.48, 0.2, 2.08]
+    ]);
+    drawTankEdges(ram, [
+      [0, 1], [1, 2], [2, 0],
+      [2, 3], [3, 4], [4, 2],
+      [1, 4]
+    ], warningColor, fade * (0.75 + pulse * 0.25), 1.25);
+
+    if (!armed) return;
+    const ringRadius = (1.55 + (1 - fuseProgress) * 0.65) * scale;
+    const segments = 16;
+    for (let i = 0; i < segments; i += 2) {
+      const angleA = i / segments * TAU;
+      const angleB = (i + 1) / segments * TAU;
+      line3d(
+        {
+          x: enemy.x + Math.sin(angleA) * ringRadius,
+          y: 0.035,
+          z: enemy.z + Math.cos(angleA) * ringRadius
+        },
+        {
+          x: enemy.x + Math.sin(angleB) * ringRadius,
+          y: 0.035,
+          z: enemy.z + Math.cos(angleB) * ringRadius
+        },
+        COLORS.amber,
+        1.3,
+        fade * pulse
+      );
+    }
   }
 
   function drawArtilleryEnemy(enemy, color, fade) {
@@ -1404,7 +1537,8 @@
     if (getEnemyType(enemy).id !== "ghost") return 1;
     const revealTimer = Math.max(0, enemy.revealTimer ?? 0);
     if (revealTimer <= 0) return 0;
-    return Math.min(1, revealTimer / 1.65);
+    const fadeProgress = Math.min(1, revealTimer / 1.65);
+    return Math.pow(fadeProgress, 1.45);
   }
 
   function drawEnemy(enemy) {
@@ -1426,7 +1560,10 @@
     if (visibility <= 0.01) return;
     const fade =
       Math.max(0.32, Math.min(1, 1.35 - range / 90)) * visibility;
-    const baseColor = type.priority ? COLORS.amber : COLORS.red;
+    const baseColor =
+      type.priority || (type.kamikaze && enemy.kamikazeArmed)
+        ? COLORS.amber
+        : COLORS.red;
     const color =
       enemy.hitFlash > 0 || (enemy.revealFlash ?? 0) > 0
         ? COLORS.white
@@ -1435,6 +1572,8 @@
     if (type.id === "guardian") {
       drawGuardianAura(enemy, fade);
       drawGuardianEnemy(enemy, type, color, fade);
+    } else if (type.kamikaze) {
+      drawKamikazeEnemy(enemy, type, color, fade);
     } else if (type.id === "artillery") {
       drawArtilleryEnemy(enemy, color, fade);
     } else {
@@ -1625,6 +1764,33 @@
     const p = project(particle);
     if (!p) return;
     const alpha = Math.max(0, particle.life / particle.maxLife);
+
+    if (particle.kind === "shockwave") {
+      const progress = 1 - alpha;
+      const radius =
+        particle.maxRadius * (1 - Math.pow(1 - progress, 2));
+      const segments = 28;
+      for (let i = 0; i < segments; i += 2) {
+        const angleA = i / segments * TAU;
+        const angleB = (i + 1) / segments * TAU;
+        line3d(
+          {
+            x: particle.x + Math.sin(angleA) * radius,
+            y: 0.04,
+            z: particle.z + Math.cos(angleA) * radius
+          },
+          {
+            x: particle.x + Math.sin(angleB) * radius,
+            y: 0.04,
+            z: particle.z + Math.cos(angleB) * radius
+          },
+          particle.color,
+          1.7,
+          alpha * 0.85
+        );
+      }
+      return;
+    }
 
     if (particle.kind === "smoke") {
       const fadeIn = Math.min(1, (1 - alpha) * 8);
@@ -2031,7 +2197,24 @@
       const markerY = py * scale;
       ctx.fillStyle = type.priority ? COLORS.amber : COLORS.red;
 
-      if (type.id === "ghost") {
+      if (type.kamikaze) {
+        const armed = Boolean(enemy.kamikazeArmed);
+        const warningColor = armed ? COLORS.amber : COLORS.red;
+        const pulse = 5 + Math.sin(performance.now() * (armed ? 0.028 : 0.012)) * 1.4;
+        ctx.strokeStyle = warningColor;
+        ctx.fillStyle = warningColor;
+        ctx.globalAlpha = armed ? 0.9 : 0.68;
+        ctx.beginPath();
+        ctx.arc(markerX, markerY, pulse, 0, TAU);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(markerX, markerY - 4);
+        ctx.lineTo(markerX + 4, markerY + 3);
+        ctx.lineTo(markerX - 4, markerY + 3);
+        ctx.closePath();
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      } else if (type.id === "ghost") {
         const pulse = 4.5 + Math.sin(performance.now() * 0.012) * 1.2;
         ctx.strokeStyle = COLORS.red;
         ctx.globalAlpha = 0.58 + Math.sin(performance.now() * 0.009) * 0.18;
@@ -2379,6 +2562,9 @@
     if (player.wave >= 4 && index === count - 3) {
       return ENEMY_TYPES.ghost;
     }
+    if (player.wave >= 5 && index === count - 4) {
+      return ENEMY_TYPES.kamikaze;
+    }
     if (index % 3 === 1) return ENEMY_TYPES.light;
     return ENEMY_TYPES.assault;
   }
@@ -2422,7 +2608,10 @@
       shieldFlash: 0,
       revealTimer: 0,
       revealDuration: 2.4,
-      revealFlash: 0
+      revealFlash: 0,
+      kamikazeArmed: false,
+      fuseTimer: 0,
+      fuseDuration: KAMIKAZE_FUSE_TIME
     };
   }
 
@@ -2488,7 +2677,12 @@
     const count = Math.min(3 + player.wave, 9);
     for (let i = 0; i < count; i += 1) {
       const type = getWaveEnemyType(i, count);
-      const minimumRange = type.id === "artillery" ? 44 : 30;
+      const minimumRange =
+        type.id === "artillery"
+          ? 44
+          : type.id === "kamikaze"
+            ? 38
+            : 30;
       const maximumRange =
         type.id === "artillery"
           ? 66
@@ -2496,7 +2690,7 @@
             ? 52
             : type.id === "ghost"
               ? 62
-            : 58;
+              : 58;
       const position = findEnemySpawn(type, minimumRange, maximumRange, i);
       enemies.push(createEnemy(type, position));
     }
@@ -2565,6 +2759,7 @@
     recenteringTurret = false;
     turretWasAligned = true;
     alignmentPulse = 0;
+    kamikazeWarningTimer = 0;
     screenShake = 0;
     flash = 0;
     waveBanner = 0;
@@ -3167,7 +3362,14 @@
   }
 
   function getEnemyMovementPlan(enemy, targetHeading) {
-    const ghost = getEnemyType(enemy).id === "ghost";
+    const type = getEnemyType(enemy);
+    if (type.kamikaze) {
+      return {
+        heading: targetHeading,
+        speedScale: enemy.kamikazeArmed ? 0.42 : 1
+      };
+    }
+    const ghost = type.id === "ghost";
     switch (enemy.state) {
       case ENEMY_STATE.RETREAT:
         return {
@@ -3203,19 +3405,26 @@
     const type = getEnemyType(enemy);
     if (type.static) return;
 
-    enemy.stateTimer -= dt;
-    if (range < ENEMY_AI.EMERGENCY_RANGE && enemy.state !== ENEMY_STATE.RETREAT) {
-      enemy.state = ENEMY_STATE.RETREAT;
-      enemy.stateTimer = 0.6;
-    } else if (enemy.stateTimer <= 0) {
-      chooseEnemyState(enemy, range);
+    if (type.kamikaze) {
+      enemy.state = ENEMY_STATE.APPROACH;
+    } else {
+      enemy.stateTimer -= dt;
+      if (
+        range < ENEMY_AI.EMERGENCY_RANGE &&
+        enemy.state !== ENEMY_STATE.RETREAT
+      ) {
+        enemy.state = ENEMY_STATE.RETREAT;
+        enemy.stateTimer = 0.6;
+      } else if (enemy.stateTimer <= 0) {
+        chooseEnemyState(enemy, range);
+      }
     }
 
     const plan = getEnemyMovementPlan(enemy, targetHeading);
     enemy.heading = turnTowardAngle(
       enemy.heading,
       plan.heading,
-      ENEMY_AI.CHASSIS_TURN_RATE * dt
+      (type.chassisTurnRate ?? ENEMY_AI.CHASSIS_TURN_RATE) * dt
     );
 
     const moveSpeed = enemy.speed * plan.speedScale;
@@ -3245,7 +3454,7 @@
       enemy.heading = turnTowardAngle(
         enemy.heading,
         slideHeading,
-        ENEMY_AI.CHASSIS_TURN_RATE * dt * 1.35
+        (type.chassisTurnRate ?? ENEMY_AI.CHASSIS_TURN_RATE) * dt * 1.35
       );
     }
 
@@ -3408,7 +3617,8 @@
     const candidates = enemies.filter((enemy) =>
       enemy !== guardian &&
       getEnemyType(enemy).id !== "guardian" &&
-      getEnemyType(enemy).id !== "ghost"
+      getEnemyType(enemy).id !== "ghost" &&
+      getEnemyType(enemy).id !== "kamikaze"
     );
     if (candidates.length === 0) return null;
 
@@ -3489,6 +3699,7 @@
   }
 
   function updateEnemies(dt) {
+    const pendingDetonations = [];
     for (const enemy of enemies) {
       enemy.revealTimer = Math.max(0, (enemy.revealTimer ?? 0) - dt);
       enemy.revealFlash = Math.max(0, (enemy.revealFlash ?? 0) - dt);
@@ -3500,6 +3711,30 @@
         target.z - enemy.z
       );
       const type = getEnemyType(enemy);
+      enemy.hitFlash = Math.max(0, enemy.hitFlash - dt);
+
+      if (type.kamikaze) {
+        if (
+          !enemy.kamikazeArmed &&
+          range <= KAMIKAZE_TRIGGER_RADIUS
+        ) {
+          enemy.kamikazeArmed = true;
+          enemy.fuseTimer = KAMIKAZE_FUSE_TIME;
+          enemy.fuseDuration = KAMIKAZE_FUSE_TIME;
+          enemy.state = ENEMY_STATE.APPROACH;
+        }
+        if (enemy.kamikazeArmed) {
+          enemy.fuseTimer = Math.max(0, enemy.fuseTimer - dt);
+          if (enemy.fuseTimer <= 0) {
+            pendingDetonations.push(enemy);
+            continue;
+          }
+        }
+        updateEnemyMovement(enemy, targetHeading, range, dt);
+        enemy.turretHeading = enemy.heading;
+        continue;
+      }
+
       const guardianAnchor =
         type.id === "guardian" ? chooseGuardianAnchor(enemy) : null;
       const movementTarget = guardianAnchor ?? target;
@@ -3509,7 +3744,6 @@
         movementTarget.z - enemy.z
       );
 
-      enemy.hitFlash = Math.max(0, enemy.hitFlash - dt);
       updateEnemyMovement(
         enemy,
         movementHeading,
@@ -3518,8 +3752,57 @@
       );
       updateEnemyTurret(enemy, targetHeading, range, target, dt);
     }
+    for (const enemy of pendingDetonations) {
+      detonateKamikaze(enemy, false);
+    }
     resolveEnemyOverlaps();
     updateEnemyShields(dt);
+  }
+
+  function updateKamikazeWarning(dt) {
+    let nearest = null;
+    let nearestDistance = 28;
+    for (const enemy of enemies) {
+      if (!getEnemyType(enemy).kamikaze) continue;
+      const range = Math.hypot(enemy.x - player.x, enemy.z - player.z);
+      if (range >= nearestDistance) continue;
+      nearest = enemy;
+      nearestDistance = range;
+    }
+
+    if (!nearest || missionPhase !== MISSION_PHASE.COMBAT) {
+      kamikazeWarningTimer = 0;
+      return;
+    }
+
+    kamikazeWarningTimer -= dt;
+    if (kamikazeWarningTimer > 0) return;
+
+    const armed = Boolean(nearest.kamikazeArmed);
+    const fuseProgress = armed
+      ? Math.max(
+          0,
+          Math.min(
+            1,
+            nearest.fuseTimer /
+              (nearest.fuseDuration || KAMIKAZE_FUSE_TIME)
+          )
+        )
+      : 1;
+    const proximity = 1 - nearestDistance / 28;
+    kamikazeWarningTimer = armed
+      ? 0.09 + fuseProgress * 0.13
+      : 0.18 + (1 - proximity) * 0.5;
+    const frequency = armed
+      ? 560 + (1 - fuseProgress) * 320
+      : 290 + proximity * 230;
+    tone(
+      frequency,
+      0.055,
+      "square",
+      armed ? 0.027 : 0.018,
+      armed ? 120 : 45
+    );
   }
 
   function damagePlayer(amount, impactX, impactZ, shake = 12) {
@@ -3562,6 +3845,106 @@
       publishSharedWorld();
       endGame();
     }
+  }
+
+  function awardEnemyDestruction(enemy) {
+    const type = getEnemyType(enemy);
+    player.score += type.score * player.wave;
+    player.kills += 1;
+  }
+
+  function createKamikazeExplosionEffects(enemy) {
+    createTankDebris(enemy);
+    burst(enemy.x, enemy.z, COLORS.red, 44);
+    burst(enemy.x, enemy.z, COLORS.amber, 24);
+    createBlastSmoke(enemy.x, enemy.z);
+    particles.push({
+      kind: "shockwave",
+      x: enemy.x,
+      y: 0.04,
+      z: enemy.z,
+      vx: 0,
+      vy: 0,
+      vz: 0,
+      gravity: 0,
+      drag: 0,
+      growth: 0,
+      size: 0,
+      color: COLORS.amber,
+      maxRadius: KAMIKAZE_BLAST_RADIUS,
+      life: 0.58,
+      maxLife: 0.58
+    });
+    const localDistance = Math.hypot(enemy.x - player.x, enemy.z - player.z);
+    screenShake = Math.max(screenShake, Math.max(0, 20 - localDistance * 1.2));
+    tone(42, 0.5, "sawtooth", 0.1, -10);
+    tone(118, 0.18, "square", 0.045, -75);
+  }
+
+  function destroyEnemy(enemy, creditPlayer = true) {
+    const enemyIndex = enemies.indexOf(enemy);
+    if (enemyIndex === -1) return false;
+    const type = getEnemyType(enemy);
+    if (type.kamikaze) return detonateKamikaze(enemy, creditPlayer);
+
+    enemies.splice(enemyIndex, 1);
+    if (creditPlayer) awardEnemyDestruction(enemy);
+    if (type.id === "guardian") clearGuardianShields(enemy.id);
+    createTankDebris(enemy);
+    burst(
+      enemy.x,
+      enemy.z,
+      type.priority ? COLORS.amber : COLORS.red,
+      32
+    );
+    screenShake = Math.max(screenShake, 9);
+    tone(58, 0.34, "sawtooth", 0.08, -20);
+    return true;
+  }
+
+  function detonateKamikaze(enemy, creditPlayer = false) {
+    const enemyIndex = enemies.indexOf(enemy);
+    if (enemyIndex === -1) return false;
+
+    enemies.splice(enemyIndex, 1);
+    if (creditPlayer) awardEnemyDestruction(enemy);
+    createKamikazeExplosionEffects(enemy);
+
+    for (const target of getCombatTargets()) {
+      const blastDistance = Math.hypot(
+        enemy.x - target.x,
+        enemy.z - target.z
+      );
+      if (blastDistance > KAMIKAZE_BLAST_RADIUS) continue;
+      const falloff = 1 - blastDistance / KAMIKAZE_BLAST_RADIUS;
+      const damage = Math.round(
+        KAMIKAZE_BLAST_DAMAGE * (0.25 + falloff * 0.75)
+      );
+      damageCombatTarget(
+        target.role,
+        damage,
+        enemy.x,
+        enemy.z,
+        20
+      );
+    }
+
+    for (const nearbyEnemy of [...enemies]) {
+      const blastDistance = Math.hypot(
+        enemy.x - nearbyEnemy.x,
+        enemy.z - nearbyEnemy.z
+      );
+      if (blastDistance > KAMIKAZE_BLAST_RADIUS) continue;
+      if (absorbEnemyShield(nearbyEnemy, enemy.x, enemy.z)) continue;
+
+      const falloff = 1 - blastDistance / KAMIKAZE_BLAST_RADIUS;
+      nearbyEnemy.health -= Math.max(1, Math.ceil(falloff * 3));
+      nearbyEnemy.hitFlash = 0.18;
+      if (nearbyEnemy.health <= 0) {
+        destroyEnemy(nearbyEnemy, creditPlayer);
+      }
+    }
+    return true;
   }
 
   function explodeArtilleryShell(shell) {
@@ -3695,21 +4078,7 @@
           burst(shell.x, shell.z, COLORS.amber, 10);
           tone(260, 0.07, "square", 0.035, -120);
           if (enemy.health <= 0) {
-            player.score += type.score * player.wave;
-            player.kills += 1;
-            if (type.id === "guardian") {
-              clearGuardianShields(enemy.id);
-            }
-            createTankDebris(enemy);
-            burst(
-              enemy.x,
-              enemy.z,
-              type.priority ? COLORS.amber : COLORS.red,
-              32
-            );
-            screenShake = 9;
-            tone(58, 0.34, "sawtooth", 0.08, -20);
-            enemies.splice(enemyIndex, 1);
+            destroyEnemy(enemy, true);
           } else {
             player.score += 25;
           }
@@ -3840,6 +4209,7 @@
     updateRemotePlayers(dt);
     updateReplicatedWorld(dt);
     if (isWorldAuthority()) updateEnemies(dt);
+    updateKamikazeWarning(dt);
     updateShells(dt);
     updateParticles(dt);
     updateTankDebris(dt);

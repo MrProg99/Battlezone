@@ -89,7 +89,8 @@ interpole le monde partagé reçu depuis `battlezone/rooms/<code>/world`.
 - Largage aérien du tank avec altimètre et impact au sol
 - Choix entre l’Éclaireur rapide à courte portée et le Bastion lent à longue portée
 - Conduite et tourelle indépendantes
-- Trois ennemis : char d’assaut, chasseur léger et artillerie prioritaire
+- Six ennemis : assaut, chasseur léger, artillerie, Gardien, Fantôme et Kamikaze
 - Obus d’artillerie en cloche avec zone d’impact, compte à rebours et dégâts de zone
+- Kamikaze à charge directe, mèche sonore et explosion pouvant provoquer des réactions en chaîne
 - Vagues progressives, score, blindage et radar
 - Effets sonores synthétisés et esthétique d’écran CRT

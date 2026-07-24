@@ -55,6 +55,8 @@
     RETREAT_MARGIN: 5,
     CHASSIS_TURN_RATE: 1.05
   });
+  const GUARDIAN_SHIELD_RADIUS = 16;
+  const GUARDIAN_SHIELD_RECHARGE = 3.2;
   const ENEMY_TYPES = Object.freeze({
     assault: Object.freeze({
       id: "assault",
@@ -101,6 +103,30 @@
       score: 140,
       static: false,
       priority: false
+    }),
+    guardian: Object.freeze({
+      id: "guardian",
+      label: "GARDIEN",
+      code: "G",
+      health: 2,
+      speed: 1.75,
+      speedVariance: 0.35,
+      preferredRangeMin: 9,
+      preferredRangeMax: 11,
+      scale: 1.05,
+      hitRadius: 1.08,
+      turretTurnRate: 1.35,
+      fireRange: 0,
+      fireAlignment: 0.2,
+      reloadBase: 99,
+      reloadMin: 99,
+      reloadJitter: 0,
+      shellSpeed: 0,
+      shellLifetime: 0,
+      score: 260,
+      static: false,
+      priority: true,
+      support: true
     }),
     artillery: Object.freeze({
       id: "artillery",
@@ -603,7 +629,13 @@
       if (!incomingEnemyIds.has(Number(enemies[i].id))) {
         if (missionPhase === MISSION_PHASE.COMBAT) {
           createTankDebris(enemies[i]);
-          burst(enemies[i].x, enemies[i].z, COLORS.red, 24);
+          const removedType = getEnemyType(enemies[i]);
+          burst(
+            enemies[i].x,
+            enemies[i].z,
+            removedType.priority ? COLORS.amber : COLORS.red,
+            24
+          );
         }
         enemies.splice(i, 1);
       }
@@ -621,13 +653,25 @@
         turretHeading: Number(snapshot.turretHeading),
         health: Number(snapshot.health),
         maxHealth: Number(snapshot.maxHealth),
-        hitFlash: Number(snapshot.hitFlash) || 0
+        hitFlash: Number(snapshot.hitFlash) || 0,
+        shieldSourceId: Number(snapshot.shieldSourceId) || 0,
+        shieldCharge: Number(snapshot.shieldCharge) || 0,
+        shieldCooldown: Number(snapshot.shieldCooldown) || 0
       };
       if (!enemy) {
-        enemy = { ...target, networkTarget: target };
+        enemy = {
+          ...target,
+          shieldFlash: target.shieldCharge > 0 ? 0.16 : 0,
+          networkTarget: target
+        };
         enemies.push(enemy);
       } else {
         if (target.health < enemy.health) enemy.hitFlash = 0.14;
+        if (target.shieldCharge < (enemy.shieldCharge ?? 0)) {
+          enemy.shieldFlash = 0.3;
+        } else if (target.shieldCharge > (enemy.shieldCharge ?? 0)) {
+          enemy.shieldFlash = 0.16;
+        }
         enemy.networkTarget = target;
       }
     }
@@ -694,6 +738,10 @@
       enemy.health = target.health;
       enemy.maxHealth = target.maxHealth;
       enemy.hitFlash = Math.max(0, enemy.hitFlash - dt);
+      enemy.shieldSourceId = target.shieldSourceId;
+      enemy.shieldCharge = target.shieldCharge;
+      enemy.shieldCooldown = target.shieldCooldown;
+      enemy.shieldFlash = Math.max(0, (enemy.shieldFlash ?? 0) - dt);
     }
     for (const shell of remoteWorldShells) {
       const target = shell.networkTarget;
@@ -726,7 +774,10 @@
         turretHeading: Number(enemy.turretHeading.toFixed(4)),
         health: enemy.health,
         maxHealth: enemy.maxHealth,
-        hitFlash: Number(enemy.hitFlash.toFixed(3))
+        hitFlash: Number(enemy.hitFlash.toFixed(3)),
+        shieldSourceId: Number(enemy.shieldSourceId) || 0,
+        shieldCharge: Number(enemy.shieldCharge) || 0,
+        shieldCooldown: Number((enemy.shieldCooldown ?? 0).toFixed(3))
       };
     }
 
@@ -1073,40 +1124,54 @@
       [0, 8], [1, 11]
     ], color, fade);
 
-    const barrelY = (light ? 0.88 : 0.96) * scale;
-    const barrelWidth = (light ? 0.045 : 0.065) * scale;
-    const barrelLength = (light ? 2.3 : 2.65) * scale;
-    const barrelStartLeft = orientedPoint(
-      enemy,
-      -barrelWidth,
-      barrelY,
-      0.5 * scale,
-      enemy.turretHeading
-    );
-    const barrelStartRight = orientedPoint(
-      enemy,
-      barrelWidth,
-      barrelY,
-      0.5 * scale,
-      enemy.turretHeading
-    );
-    const barrelEndLeft = orientedPoint(
-      enemy,
-      -barrelWidth,
-      barrelY,
-      barrelLength,
-      enemy.turretHeading
-    );
-    const barrelEndRight = orientedPoint(
-      enemy,
-      barrelWidth,
-      barrelY,
-      barrelLength,
-      enemy.turretHeading
-    );
-    drawTankEdge(barrelStartLeft, barrelEndLeft, color, fade, light ? 1 : 1.45);
-    drawTankEdge(barrelStartRight, barrelEndRight, color, fade, light ? 1 : 1.45);
-    drawTankEdge(barrelEndLeft, barrelEndRight, color, fade, 1);
+    if (!type.support) {
+      const barrelY = (light ? 0.88 : 0.96) * scale;
+      const barrelWidth = (light ? 0.045 : 0.065) * scale;
+      const barrelLength = (light ? 2.3 : 2.65) * scale;
+      const barrelStartLeft = orientedPoint(
+        enemy,
+        -barrelWidth,
+        barrelY,
+        0.5 * scale,
+        enemy.turretHeading
+      );
+      const barrelStartRight = orientedPoint(
+        enemy,
+        barrelWidth,
+        barrelY,
+        0.5 * scale,
+        enemy.turretHeading
+      );
+      const barrelEndLeft = orientedPoint(
+        enemy,
+        -barrelWidth,
+        barrelY,
+        barrelLength,
+        enemy.turretHeading
+      );
+      const barrelEndRight = orientedPoint(
+        enemy,
+        barrelWidth,
+        barrelY,
+        barrelLength,
+        enemy.turretHeading
+      );
+      drawTankEdge(
+        barrelStartLeft,
+        barrelEndLeft,
+        color,
+        fade,
+        light ? 1 : 1.45
+      );
+      drawTankEdge(
+        barrelStartRight,
+        barrelEndRight,
+        color,
+        fade,
+        light ? 1 : 1.45
+      );
+      drawTankEdge(barrelEndLeft, barrelEndRight, color, fade, 1);
+    }
 
     const opticBottom = turretHeight + 0.03;
     const opticTop = opticBottom + (light ? 0.15 : 0.19);
@@ -1163,11 +1228,152 @@
     }
   }
 
+  function drawGuardianAura(enemy, fade) {
+    const pulse =
+      GUARDIAN_SHIELD_RADIUS +
+      Math.sin(performance.now() * 0.0045 + enemy.id) * 0.35;
+    const segments = 32;
+    for (let i = 0; i < segments; i += 2) {
+      const angleA = i / segments * TAU;
+      const angleB = (i + 1) / segments * TAU;
+      line3d(
+        {
+          x: enemy.x + Math.sin(angleA) * pulse,
+          y: 0.025,
+          z: enemy.z + Math.cos(angleA) * pulse
+        },
+        {
+          x: enemy.x + Math.sin(angleB) * pulse,
+          y: 0.025,
+          z: enemy.z + Math.cos(angleB) * pulse
+        },
+        COLORS.cyan,
+        1,
+        fade * 0.22
+      );
+    }
+  }
+
+  function drawGuardianEnemy(enemy, type, color, fade) {
+    drawMobileEnemy(enemy, type, color, fade);
+
+    const scale = type.scale;
+    const mastBase = orientedPoint(
+      enemy,
+      0,
+      1.02 * scale,
+      -0.2 * scale,
+      enemy.heading
+    );
+    const generatorCenter = orientedPoint(
+      enemy,
+      0,
+      1.58 * scale,
+      -0.2 * scale,
+      enemy.heading
+    );
+    const generatorTop = {
+      ...generatorCenter,
+      y: generatorCenter.y + 0.42 * scale
+    };
+    const generatorBottom = {
+      ...generatorCenter,
+      y: generatorCenter.y - 0.34 * scale
+    };
+    const ring = [
+      orientedPoint(enemy, -0.34 * scale, 1.58 * scale, -0.2 * scale, enemy.heading),
+      orientedPoint(enemy, 0, 1.58 * scale, 0.14 * scale, enemy.heading),
+      orientedPoint(enemy, 0.34 * scale, 1.58 * scale, -0.2 * scale, enemy.heading),
+      orientedPoint(enemy, 0, 1.58 * scale, -0.54 * scale, enemy.heading)
+    ];
+    const generatorFade =
+      fade * (0.72 + Math.sin(performance.now() * 0.01) * 0.18);
+
+    drawTankEdge(mastBase, generatorBottom, COLORS.cyan, generatorFade, 1.2);
+    for (let i = 0; i < ring.length; i += 1) {
+      drawTankEdge(
+        ring[i],
+        ring[(i + 1) % ring.length],
+        COLORS.cyan,
+        generatorFade,
+        1.15
+      );
+      drawTankEdge(ring[i], generatorTop, COLORS.cyan, generatorFade, 1.1);
+      drawTankEdge(ring[i], generatorBottom, COLORS.cyan, generatorFade, 1.1);
+    }
+  }
+
+  function drawEnemyShield(enemy, fade) {
+    const source = enemies.find(
+      (candidate) =>
+        Number(candidate.id) === Number(enemy.shieldSourceId) &&
+        getEnemyType(candidate).id === "guardian"
+    );
+    if (!source) return;
+
+    const type = getEnemyType(enemy);
+    const shielded = (enemy.shieldCharge ?? 0) > 0;
+    const linkAlpha = fade * (shielded ? 0.26 : 0.08);
+    drawTankEdge(
+      { x: source.x, y: 1.62 * getEnemyType(source).scale, z: source.z },
+      { x: enemy.x, y: 0.92 * type.scale, z: enemy.z },
+      COLORS.cyan,
+      linkAlpha,
+      0.9
+    );
+    if (!shielded) return;
+
+    const pulse =
+      1 +
+      Math.sin(performance.now() * 0.012 + enemy.id) * 0.045;
+    const radius = 1.55 * type.scale * pulse;
+    const centerY = 0.82 * type.scale;
+    const top = {
+      x: enemy.x,
+      y: centerY + 1.02 * type.scale,
+      z: enemy.z
+    };
+    const bottom = {
+      x: enemy.x,
+      y: 0.04,
+      z: enemy.z
+    };
+    const ring = [];
+    const segments = 6;
+    for (let i = 0; i < segments; i += 1) {
+      const angle = i / segments * TAU;
+      ring.push({
+        x: enemy.x + Math.sin(angle) * radius,
+        y: centerY,
+        z: enemy.z + Math.cos(angle) * radius
+      });
+    }
+
+    const flashBoost = Math.min(0.55, (enemy.shieldFlash ?? 0) * 1.8);
+    const shieldAlpha = fade * (0.34 + flashBoost);
+    for (let i = 0; i < segments; i += 1) {
+      drawTankEdge(
+        ring[i],
+        ring[(i + 1) % segments],
+        COLORS.cyan,
+        shieldAlpha,
+        1.05
+      );
+      drawTankEdge(ring[i], top, COLORS.cyan, shieldAlpha, 0.9);
+      drawTankEdge(ring[i], bottom, COLORS.cyan, shieldAlpha, 0.9);
+    }
+  }
+
   function drawEnemy(enemy) {
     const type = getEnemyType(enemy);
     const centerProjection = project({
       x: enemy.x,
-      y: type.id === "artillery" ? 1 : 0.85 * type.scale,
+      y:
+        type.id === "artillery"
+          ? 1
+          : type.id === "guardian"
+            ? 1.18 * type.scale
+            : 0.85 * type.scale,
       z: enemy.z
     });
     if (!centerProjection) return;
@@ -1177,11 +1383,15 @@
     const baseColor = type.priority ? COLORS.amber : COLORS.red;
     const color = enemy.hitFlash > 0 ? COLORS.white : baseColor;
 
-    if (type.id === "artillery") {
+    if (type.id === "guardian") {
+      drawGuardianAura(enemy, fade);
+      drawGuardianEnemy(enemy, type, color, fade);
+    } else if (type.id === "artillery") {
       drawArtilleryEnemy(enemy, color, fade);
     } else {
       drawMobileEnemy(enemy, type, color, fade);
     }
+    drawEnemyShield(enemy, fade);
 
     const labelRange = type.priority ? 60 : 42;
     if (centerProjection.depth >= labelRange) return;
@@ -1989,18 +2199,30 @@
   function drawLandingImpact() {
     if (landingPulse <= 0) return;
     const progress = 1 - landingPulse;
-    const radius = 30 + progress * Math.min(width, height) * 0.5;
+    const radius = 0.7 + progress * 14;
+    const segments = 48;
 
     ctx.save();
     ctx.fillStyle = `rgba(220, 255, 228, ${landingPulse * 0.1})`;
     ctx.fillRect(0, 0, width, height);
-    ctx.globalAlpha = landingPulse * 0.8;
-    ctx.strokeStyle = COLORS.amber;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.ellipse(width / 2, horizon + height * 0.18, radius, radius * 0.24, 0, 0, TAU);
-    ctx.stroke();
     ctx.restore();
+
+    for (let i = 0; i < segments; i += 1) {
+      const angleA = i / segments * TAU;
+      const angleB = (i + 1) / segments * TAU;
+      const start = {
+        x: player.x + Math.sin(angleA) * radius,
+        y: 0.035,
+        z: player.z + Math.cos(angleA) * radius
+      };
+      const end = {
+        x: player.x + Math.sin(angleB) * radius,
+        y: 0.035,
+        z: player.z + Math.cos(angleB) * radius
+      };
+      line3d(start, end, COLORS.amber, 4, landingPulse * 0.08);
+      line3d(start, end, COLORS.amber, 1.5, landingPulse * 0.78);
+    }
   }
 
   function draw() {
@@ -2048,6 +2270,7 @@
     renderables.sort((a, b) => b.depth - a.depth);
     for (const item of renderables) item.draw();
 
+    drawLandingImpact();
     drawCockpit();
     if (missionPhase === MISSION_PHASE.DROP) {
       drawDropHud();
@@ -2058,8 +2281,6 @@
       drawWaveBanner();
       drawIncomingArtilleryWarning();
     }
-    drawLandingImpact();
-
     if (!pointerLocked && running && !paused && !gameOver) {
       ctx.fillStyle = "rgba(2, 8, 5, 0.72)";
       ctx.fillRect(width / 2 - 128, height - 92, 256, 27);
@@ -2089,6 +2310,9 @@
 
   function getWaveEnemyType(index, count) {
     if (index === count - 1) return ENEMY_TYPES.artillery;
+    if (player.wave >= 3 && index === count - 2) {
+      return ENEMY_TYPES.guardian;
+    }
     if (index % 3 === 1) return ENEMY_TYPES.light;
     return ENEMY_TYPES.assault;
   }
@@ -2125,7 +2349,11 @@
       strafeDirection: Math.random() < 0.5 ? -1 : 1,
       state: type.static ? ENEMY_STATE.ENGAGE : ENEMY_STATE.APPROACH,
       stateTimer: Math.random() * 0.4,
-      hitFlash: 0
+      hitFlash: 0,
+      shieldSourceId: 0,
+      shieldCharge: 0,
+      shieldCooldown: 0,
+      shieldFlash: 0
     };
   }
 
@@ -2192,7 +2420,12 @@
     for (let i = 0; i < count; i += 1) {
       const type = getWaveEnemyType(i, count);
       const minimumRange = type.id === "artillery" ? 44 : 30;
-      const maximumRange = type.id === "artillery" ? 66 : 58;
+      const maximumRange =
+        type.id === "artillery"
+          ? 66
+          : type.id === "guardian"
+            ? 52
+            : 58;
       const position = findEnemySpawn(type, minimumRange, maximumRange, i);
       enemies.push(createEnemy(type, position));
     }
@@ -3056,20 +3289,113 @@
     }
   }
 
+  function chooseGuardianAnchor(guardian) {
+    const candidates = enemies.filter((enemy) =>
+      enemy !== guardian && getEnemyType(enemy).id !== "guardian"
+    );
+    if (candidates.length === 0) return null;
+
+    let best = null;
+    let bestScore = Infinity;
+    for (const candidate of candidates) {
+      let score = distance(guardian, candidate) * 0.2;
+      for (const other of candidates) {
+        score += distance(candidate, other);
+      }
+      if (getEnemyType(candidate).id === "artillery") score -= 8;
+      if (score < bestScore) {
+        best = candidate;
+        bestScore = score;
+      }
+    }
+    return best;
+  }
+
+  function updateEnemyShields(dt) {
+    const guardians = enemies.filter(
+      (enemy) => getEnemyType(enemy).id === "guardian"
+    );
+
+    for (const enemy of enemies) {
+      enemy.shieldFlash = Math.max(0, (enemy.shieldFlash ?? 0) - dt);
+      enemy.shieldCooldown = Math.max(
+        0,
+        (enemy.shieldCooldown ?? 0) - dt
+      );
+      if (getEnemyType(enemy).id !== "guardian") {
+        enemy.shieldSourceId = 0;
+      } else {
+        enemy.shieldCharge = 0;
+        enemy.shieldCooldown = 0;
+      }
+    }
+
+    for (const target of enemies) {
+      if (getEnemyType(target).id === "guardian") continue;
+      let closestGuardian = null;
+      let closestRange = GUARDIAN_SHIELD_RADIUS;
+      for (const guardian of guardians) {
+        const range = distance(target, guardian);
+        if (range <= closestRange) {
+          closestGuardian = guardian;
+          closestRange = range;
+        }
+      }
+
+      if (!closestGuardian) {
+        target.shieldCharge = 0;
+        continue;
+      }
+
+      target.shieldSourceId = closestGuardian.id;
+      if (
+        (target.shieldCharge ?? 0) <= 0 &&
+        target.shieldCooldown <= 0
+      ) {
+        target.shieldCharge = 1;
+        target.shieldFlash = Math.max(target.shieldFlash, 0.16);
+      }
+    }
+  }
+
+  function clearGuardianShields(sourceId) {
+    for (const enemy of enemies) {
+      if (Number(enemy.shieldSourceId) !== Number(sourceId)) continue;
+      enemy.shieldSourceId = 0;
+      enemy.shieldCharge = 0;
+    }
+  }
+
   function updateEnemies(dt) {
     for (const enemy of enemies) {
       const targetChoice = chooseEnemyTarget(enemy);
       if (!targetChoice) continue;
       const { target, range } = targetChoice;
-      const dx = target.x - enemy.x;
-      const dz = target.z - enemy.z;
-      const targetHeading = Math.atan2(dx, dz);
+      const targetHeading = Math.atan2(
+        target.x - enemy.x,
+        target.z - enemy.z
+      );
+      const type = getEnemyType(enemy);
+      const guardianAnchor =
+        type.id === "guardian" ? chooseGuardianAnchor(enemy) : null;
+      const movementTarget = guardianAnchor ?? target;
+      const movementRange = distance(enemy, movementTarget);
+      const movementHeading = Math.atan2(
+        movementTarget.x - enemy.x,
+        movementTarget.z - enemy.z
+      );
 
       enemy.hitFlash = Math.max(0, enemy.hitFlash - dt);
-      updateEnemyMovement(enemy, targetHeading, range, dt);
+      updateEnemyMovement(
+        enemy,
+        movementHeading,
+        movementRange,
+        dt
+      );
       updateEnemyTurret(enemy, targetHeading, range, target, dt);
     }
     resolveEnemyOverlaps();
+    updateEnemyShields(dt);
   }
 
   function damagePlayer(amount, impactX, impactZ, shake = 12) {
@@ -3164,6 +3490,28 @@
     return true;
   }
 
+  function absorbEnemyShield(enemy, impactX, impactZ) {
+    if ((enemy.shieldCharge ?? 0) <= 0) return false;
+    const source = enemies.find(
+      (candidate) =>
+        Number(candidate.id) === Number(enemy.shieldSourceId) &&
+        getEnemyType(candidate).id === "guardian"
+    );
+    if (!source) {
+      enemy.shieldCharge = 0;
+      enemy.shieldSourceId = 0;
+      return false;
+    }
+
+    enemy.shieldCharge = 0;
+    enemy.shieldCooldown = GUARDIAN_SHIELD_RECHARGE;
+    enemy.shieldFlash = 0.32;
+    burst(impactX, impactZ, COLORS.cyan, 18);
+    screenShake = Math.max(screenShake, 4);
+    tone(430, 0.11, "square", 0.045, 180);
+    return true;
+  }
+
   function updateShells(dt) {
     for (let i = shells.length - 1; i >= 0; i -= 1) {
       const shell = shells[i];
@@ -3198,19 +3546,41 @@
           const type = getEnemyType(enemy);
           if (!isWorldAuthority()) {
             shells.splice(i, 1);
-            burst(shell.x, shell.z, COLORS.amber, 7);
+            const shielded = (enemy.shieldCharge ?? 0) > 0;
+            if (shielded) {
+              enemy.shieldCharge = 0;
+              enemy.shieldFlash = 0.28;
+            }
+            burst(
+              shell.x,
+              shell.z,
+              shielded ? COLORS.cyan : COLORS.amber,
+              shielded ? 14 : 7
+            );
+            continue;
+          }
+          shells.splice(i, 1);
+          if (absorbEnemyShield(enemy, shell.x, shell.z)) {
+            player.score += 10;
             continue;
           }
           enemy.health -= 1;
           enemy.hitFlash = 0.14;
-          shells.splice(i, 1);
           burst(shell.x, shell.z, COLORS.amber, 10);
           tone(260, 0.07, "square", 0.035, -120);
           if (enemy.health <= 0) {
             player.score += type.score * player.wave;
             player.kills += 1;
+            if (type.id === "guardian") {
+              clearGuardianShields(enemy.id);
+            }
             createTankDebris(enemy);
-            burst(enemy.x, enemy.z, COLORS.red, 32);
+            burst(
+              enemy.x,
+              enemy.z,
+              type.priority ? COLORS.amber : COLORS.red,
+              32
+            );
             screenShake = 9;
             tone(58, 0.34, "sawtooth", 0.08, -20);
             enemies.splice(enemyIndex, 1);

@@ -71,6 +71,7 @@
   const DRONE_VERTICAL_SPEED = 3.35;
   const DRONE_ATTACK_ALTITUDE = 0.95;
   const DRONE_STRAFE_TIME = 1.15;
+  const MOON_WORLD_AZIMUTH = 0.48;
   const ENEMY_TYPES = Object.freeze({
     assault: Object.freeze({
       id: "assault",
@@ -1147,6 +1148,87 @@
       ctx.lineTo(width, horizon);
       ctx.stroke();
     }
+  }
+
+  function drawMoon() {
+    const cameraYaw = player.heading + player.turretOffset;
+    const relativeAzimuth = normalizeAngle(MOON_WORLD_AZIMUTH - cameraYaw);
+    if (Math.abs(relativeAzimuth) > 1.18) return;
+
+    const moonX = width * 0.5 + Math.tan(relativeAzimuth) * focal;
+    const moonY = horizon - Math.max(105, Math.min(190, height * 0.21));
+    const radius = Math.max(25, Math.min(46, Math.min(width, height) * 0.052));
+    if (moonX < -radius * 1.5 || moonX > width + radius * 1.5) return;
+
+    ctx.save();
+    ctx.translate(moonX, moonY);
+    ctx.strokeStyle = COLORS.soft;
+    ctx.fillStyle = "rgba(120, 255, 154, 0.025)";
+    ctx.shadowColor = "rgba(120, 255, 154, 0.45)";
+    ctx.shadowBlur = 10;
+    ctx.lineWidth = 1.15;
+    ctx.globalAlpha = 0.56;
+    ctx.beginPath();
+    ctx.arc(0, 0, radius, 0, TAU);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.shadowBlur = 0;
+    ctx.beginPath();
+    ctx.arc(0, 0, radius - 1, 0, TAU);
+    ctx.clip();
+
+    // Relief lunaire réduit à quelques cratères et facettes vectorielles.
+    ctx.strokeStyle = COLORS.dim;
+    ctx.lineWidth = 0.9;
+    ctx.globalAlpha = 0.42;
+    const craters = [
+      [-0.34, -0.24, 0.2, 0.12, -0.25],
+      [0.22, -0.08, 0.14, 0.09, 0.18],
+      [-0.04, 0.28, 0.18, 0.1, -0.12],
+      [0.42, 0.32, 0.09, 0.06, 0.35]
+    ];
+    for (const [x, y, rx, ry, rotation] of craters) {
+      ctx.beginPath();
+      ctx.ellipse(
+        x * radius,
+        y * radius,
+        rx * radius,
+        ry * radius,
+        rotation,
+        0,
+        TAU
+      );
+      ctx.stroke();
+    }
+
+    ctx.globalAlpha = 0.25;
+    ctx.beginPath();
+    ctx.moveTo(-radius * 0.88, radius * 0.08);
+    ctx.lineTo(-radius * 0.28, -radius * 0.02);
+    ctx.lineTo(radius * 0.08, radius * 0.18);
+    ctx.lineTo(radius * 0.82, radius * 0.04);
+    ctx.moveTo(-radius * 0.62, -radius * 0.62);
+    ctx.lineTo(-radius * 0.12, -radius * 0.34);
+    ctx.lineTo(radius * 0.54, -radius * 0.5);
+    ctx.stroke();
+
+    // Un arc intérieur rappelle le croissant très graphique du jeu original.
+    ctx.strokeStyle = COLORS.green;
+    ctx.lineWidth = 1.45;
+    ctx.globalAlpha = 0.52;
+    ctx.beginPath();
+    ctx.ellipse(
+      radius * 0.17,
+      0,
+      radius * 0.63,
+      radius * 0.91,
+      0,
+      Math.PI * 0.56,
+      Math.PI * 1.44
+    );
+    ctx.stroke();
+    ctx.restore();
   }
 
   function drawMountains() {
@@ -2846,7 +2928,10 @@
     ctx.fillStyle = COLORS.black;
     ctx.fillRect(-20, -20, width + 40, height + 40);
 
-    if (missionPhase !== MISSION_PHASE.DROP || player.altitude < 8) drawMountains();
+    if (missionPhase !== MISSION_PHASE.DROP || player.altitude < 8) {
+      drawMoon();
+      drawMountains();
+    }
     drawGround();
 
     const renderables = [

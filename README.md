@@ -87,6 +87,7 @@ interpole le monde partagé reçu depuis `battlezone/rooms/<code>/world`.
 ## Contenu du prototype
 
 - Vue cockpit en perspective 3D
+- Lune vectorielle avec cratères, croissant et parallaxe dans le ciel
 - Largage aérien du tank avec altimètre et impact au sol
 - Choix entre l’Éclaireur rapide à courte portée et le Bastion lent à longue portée
 - Conduite et tourelle indépendantes

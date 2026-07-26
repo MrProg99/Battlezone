@@ -1050,12 +1050,20 @@
       orientedPoint(origin, sx, sy, sz, angle),
       orientedPoint(origin, -sx, sy, sz, angle)
     ];
-    const edges = [
-      [0, 1], [1, 2], [2, 3], [3, 0],
-      [4, 5], [5, 6], [6, 7], [7, 4],
-      [0, 4], [1, 5], [2, 6], [3, 7]
-    ];
-    for (const [a, b] of edges) line3d(vertices[a], vertices[b], color, 1.25, alpha);
+    drawTankFaces([
+      {
+        points: vertices,
+        faces: [
+          [0, 1, 2, 3],
+          [4, 7, 6, 5],
+          [0, 4, 5, 1],
+          [1, 5, 6, 2],
+          [2, 6, 7, 3],
+          [3, 7, 4, 0]
+        ],
+        lineWidth: 1.25
+      }
+    ], color, alpha);
   }
 
   function drawGround() {
@@ -1150,6 +1158,53 @@
     }
   }
 
+  function drawTankFaces(groups, color, fade, maskAlpha = 0.99) {
+    const orderedFaces = [];
+    for (const group of groups) {
+      for (const face of group.faces) {
+        const worldPoints = face.map((index) => group.points[index]);
+        const cameraPoints = worldPoints.map(worldToCamera);
+        if (cameraPoints.some((point) => point.z <= NEAR)) continue;
+        const screenPoints = cameraPoints.map(cameraToScreen);
+        const depth =
+          cameraPoints.reduce((sum, point) => sum + point.z, 0) /
+          cameraPoints.length;
+        orderedFaces.push({
+          worldPoints,
+          screenPoints,
+          depth,
+          lineWidth: group.lineWidth ?? 1.25
+        });
+      }
+    }
+
+    orderedFaces.sort((a, b) => b.depth - a.depth);
+    ctx.save();
+    for (const face of orderedFaces) {
+      ctx.globalAlpha = maskAlpha;
+      ctx.fillStyle = COLORS.black;
+      ctx.beginPath();
+      ctx.moveTo(face.screenPoints[0].x, face.screenPoints[0].y);
+      for (let i = 1; i < face.screenPoints.length; i += 1) {
+        ctx.lineTo(face.screenPoints[i].x, face.screenPoints[i].y);
+      }
+      ctx.closePath();
+      ctx.fill();
+      ctx.globalAlpha = 1;
+
+      for (let i = 0; i < face.worldPoints.length; i += 1) {
+        drawTankEdge(
+          face.worldPoints[i],
+          face.worldPoints[(i + 1) % face.worldPoints.length],
+          color,
+          fade,
+          face.lineWidth
+        );
+      }
+    }
+    ctx.restore();
+  }
+
   function drawMobileEnemy(enemy, type, color, fade) {
     const scale = type.scale;
     const light =
@@ -1168,14 +1223,18 @@
       [0.58, 0.73, 0.62],
       [-0.58, 0.73, 0.62]
     ]);
-    drawTankEdges(hull, [
-      [0, 1], [1, 2], [2, 3], [3, 0],
-      [4, 5], [5, 6], [6, 7], [7, 4],
-      [0, 4], [1, 5], [2, 6], [3, 7],
-      [4, 8], [5, 9], [6, 10], [7, 11],
-      [8, 9], [9, 10], [10, 11], [11, 8],
-      [4, 10], [5, 11], [7, 10]
-    ], color, fade);
+    const hullFaces = [
+      [0, 1, 2, 3],
+      [0, 4, 5, 1],
+      [1, 5, 6, 2],
+      [2, 6, 7, 3],
+      [3, 7, 4, 0],
+      [4, 8, 9, 5],
+      [5, 9, 10, 6],
+      [6, 10, 11, 7],
+      [7, 11, 8, 4],
+      [8, 11, 10, 9]
+    ];
 
     const leftTrack = buildTankVertices(enemy, enemy.heading, scale, [
       [-1.31, 0.08, -1.05],
@@ -1193,12 +1252,7 @@
       [0.92, 0.03, 0.88],
       [0.94, 0.03, -0.88]
     ]);
-    const trackEdges = [
-      [0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 0],
-      [0, 3], [1, 4]
-    ];
-    drawTankEdges(leftTrack, trackEdges, color, fade, 1.4);
-    drawTankEdges(rightTrack, trackEdges, color, fade, 1.4);
+    const trackFaces = [[0, 1, 2, 3, 4, 5]];
 
     const turretHeight = light ? 0.98 : 1.08;
     const turret = buildTankVertices(enemy, enemy.turretHeading, scale, [
@@ -1215,12 +1269,24 @@
       [-0.3, turretHeight, 0.5],
       [-0.5, turretHeight, 0.3]
     ]);
-    drawTankEdges(turret, [
-      [0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 0],
-      [6, 7], [7, 8], [8, 9], [9, 10], [10, 11], [11, 6],
-      [0, 6], [1, 7], [2, 8], [3, 9], [4, 10], [5, 11],
-      [0, 8], [1, 11]
-    ], color, fade);
+    const turretFaces = [
+      [0, 1, 2, 3, 4, 5],
+      [6, 11, 10, 9, 8, 7],
+      [0, 6, 7, 1],
+      [1, 7, 8, 2],
+      [2, 8, 9, 3],
+      [3, 9, 10, 4],
+      [4, 10, 11, 5],
+      [5, 11, 6, 0]
+    ];
+    const bodyFaceGroups = [
+      { points: hull, faces: hullFaces, lineWidth: 1.25 },
+      { points: leftTrack, faces: trackFaces, lineWidth: 1.4 },
+      { points: rightTrack, faces: trackFaces, lineWidth: 1.4 },
+      { points: turret, faces: turretFaces, lineWidth: 1.25 }
+    ];
+    const bodyMaskAlpha = type.stealth ? Math.min(0.99, fade) : 0.99;
+    drawTankFaces(bodyFaceGroups, color, fade, bodyMaskAlpha);
 
     if (!type.support) {
       const barrelY = (light ? 0.88 : 0.96) * scale;
@@ -1269,6 +1335,12 @@
         light ? 1 : 1.45
       );
       drawTankEdge(barrelEndLeft, barrelEndRight, color, fade, 1);
+      if (
+        worldToCamera(barrelEndLeft).z >
+        worldToCamera(barrelStartLeft).z
+      ) {
+        drawTankFaces(bodyFaceGroups, color, fade, bodyMaskAlpha);
+      }
     }
 
     const opticBottom = turretHeight + 0.03;
@@ -1283,11 +1355,20 @@
       [0.16, opticTop, 0.07],
       [-0.16, opticTop, 0.07]
     ]);
-    drawTankEdges(optic, [
-      [0, 1], [1, 2], [2, 3], [3, 0],
-      [4, 5], [5, 6], [6, 7], [7, 4],
-      [0, 4], [1, 5], [2, 6], [3, 7]
-    ], color, fade, 1);
+    drawTankFaces([
+      {
+        points: optic,
+        faces: [
+          [0, 1, 2, 3],
+          [4, 7, 6, 5],
+          [0, 4, 5, 1],
+          [1, 5, 6, 2],
+          [2, 6, 7, 3],
+          [3, 7, 4, 0]
+        ],
+        lineWidth: 1
+      }
+    ], color, fade, bodyMaskAlpha);
   }
 
   function drawKamikazeEnemy(enemy, type, color, fade) {
@@ -1362,14 +1443,6 @@
   }
 
   function drawArtilleryEnemy(enemy, color, fade) {
-    drawBox(enemy, [1.25, 0.34, 1.18], enemy.heading, color, fade);
-    const turretOrigin = orientedPoint(enemy, 0, 0, 0.04, enemy.heading);
-    drawBox(turretOrigin, [0.72, 0.88, 0.7], enemy.turretHeading, color, fade);
-
-    const barrelStart = orientedPoint(enemy, 0, 0.7, 0.48, enemy.turretHeading);
-    const barrelEnd = orientedPoint(enemy, 0, 1.72, 2.35, enemy.turretHeading);
-    line3d(barrelStart, barrelEnd, color, 2.4, fade);
-
     for (let i = 0; i < 4; i += 1) {
       const angle = enemy.heading + Math.PI / 4 + i * Math.PI / 2;
       const near = {
@@ -1395,6 +1468,14 @@
       line3d(near, far, color, 1.4, fade);
       line3d(footLeft, footRight, color, 1.2, fade);
     }
+
+    drawBox(enemy, [1.25, 0.34, 1.18], enemy.heading, color, fade);
+    const turretOrigin = orientedPoint(enemy, 0, 0, 0.04, enemy.heading);
+    drawBox(turretOrigin, [0.72, 0.88, 0.7], enemy.turretHeading, color, fade);
+
+    const barrelStart = orientedPoint(enemy, 0, 0.7, 0.48, enemy.turretHeading);
+    const barrelEnd = orientedPoint(enemy, 0, 1.72, 2.35, enemy.turretHeading);
+    line3d(barrelStart, barrelEnd, color, 2.4, fade);
   }
 
   function drawGuardianAura(enemy, fade) {

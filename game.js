@@ -3398,6 +3398,11 @@
         type.preferredRangeMin +
         Math.random() * (type.preferredRangeMax - type.preferredRangeMin),
       strafeDirection: Math.random() < 0.5 ? -1 : 1,
+      flankSide: 0,
+      flankTimer: 0,
+      targetRole: null,
+      targetLockTimer: 0,
+      blockedSightTimer: 0,
       state: type.static ? ENEMY_STATE.ENGAGE : ENEMY_STATE.APPROACH,
       stateTimer: Math.random() * 0.4,
       hitFlash: 0,
@@ -4159,18 +4164,47 @@
   }
 
   function chooseEnemyState(enemy, range) {
+    const type = getEnemyType(enemy);
     if (range > enemy.preferredRange + ENEMY_AI.APPROACH_MARGIN) {
       enemy.state = ENEMY_STATE.APPROACH;
     } else if (range < enemy.preferredRange - ENEMY_AI.RETREAT_MARGIN) {
       enemy.state = ENEMY_STATE.RETREAT;
     } else {
       enemy.state = ENEMY_STATE.ENGAGE;
-      if (Math.random() < 0.22) enemy.strafeDirection *= -1;
+      if (type.id !== "light" && Math.random() < 0.22) {
+        enemy.strafeDirection *= -1;
+      }
     }
 
     enemy.stateTimer =
       ENEMY_AI.DECISION_MIN +
-      Math.random() * (ENEMY_AI.DECISION_MAX - ENEMY_AI.DECISION_MIN);
+        Math.random() * (ENEMY_AI.DECISION_MAX - ENEMY_AI.DECISION_MIN);
+  }
+
+  function updateLightFlankIntent(enemy, target, dt) {
+    enemy.flankTimer = Math.max(0, (enemy.flankTimer ?? 0) - dt);
+    if (enemy.flankTimer > 0) return;
+
+    const angleFromTarget = Math.atan2(
+      enemy.x - target.x,
+      enemy.z - target.z
+    );
+    const relativeSide = Math.sin(
+      normalizeAngle(angleFromTarget - target.heading)
+    );
+    let flankSide = enemy.flankSide || (relativeSide >= 0 ? 1 : -1);
+    if (Math.abs(relativeSide) < 0.22 && !enemy.flankSide) {
+      flankSide = enemy.id % 2 === 0 ? 1 : -1;
+    }
+    if ((enemy.blockedSightTimer ?? 0) > 0.28) {
+      flankSide *= -1;
+    } else if (enemy.flankSide && Math.random() < 0.18) {
+      flankSide *= -1;
+    }
+
+    enemy.flankSide = flankSide;
+    enemy.strafeDirection = flankSide;
+    enemy.flankTimer = 3.2 + Math.random() * 2.4;
   }
 
   function getEnemyMovementPlan(enemy, targetHeading) {
@@ -4182,38 +4216,48 @@
       };
     }
     const ghost = type.id === "ghost";
+    const flanker = type.id === "light";
     switch (enemy.state) {
       case ENEMY_STATE.RETREAT:
         return {
           heading:
             targetHeading +
             Math.PI +
-            enemy.strafeDirection * (ghost ? 0.42 : 0.22),
-          speedScale: ghost ? 1 : 0.86
+            enemy.strafeDirection * (ghost ? 0.42 : flanker ? 0.34 : 0.22),
+          speedScale: ghost || flanker ? 1 : 0.86
         };
       case ENEMY_STATE.ENGAGE:
         return {
           heading:
-            targetHeading + enemy.strafeDirection * (ghost ? 1.42 : 1.24),
-          speedScale: ghost ? 0.9 : 0.72
+            targetHeading +
+            enemy.strafeDirection * (ghost ? 1.42 : flanker ? 1.52 : 1.24),
+          speedScale: ghost ? 0.9 : flanker ? 0.86 : 0.72
         };
       case ENEMY_STATE.REPOSITION:
         return {
           heading:
-            targetHeading + enemy.strafeDirection * (ghost ? 1.95 : 1.75),
-          speedScale: ghost ? 1 : 0.92
+            targetHeading +
+            enemy.strafeDirection * (ghost ? 1.95 : flanker ? 2.05 : 1.75),
+          speedScale: ghost || flanker ? 1 : 0.92
         };
       case ENEMY_STATE.APPROACH:
       default:
         return {
           heading:
-            targetHeading + enemy.strafeDirection * (ghost ? 0.48 : 0.18),
+            targetHeading +
+            enemy.strafeDirection * (ghost ? 0.48 : flanker ? 0.38 : 0.18),
           speedScale: 1
         };
     }
   }
 
-  function updateEnemyMovement(enemy, targetHeading, range, dt) {
+  function updateEnemyMovement(
+    enemy,
+    targetHeading,
+    range,
+    dt,
+    lineOfFireClear = true
+  ) {
     const type = getEnemyType(enemy);
     if (type.static) return;
 
@@ -4221,7 +4265,26 @@
       enemy.state = ENEMY_STATE.APPROACH;
     } else {
       enemy.stateTimer -= dt;
-      if (
+      const needsFiringLane =
+        type.fireRange > 0 &&
+        range < type.fireRange &&
+        !lineOfFireClear;
+      enemy.blockedSightTimer = needsFiringLane
+        ? (enemy.blockedSightTimer ?? 0) + dt
+        : Math.max(0, (enemy.blockedSightTimer ?? 0) - dt * 2);
+
+      if (needsFiringLane && enemy.blockedSightTimer > 0.16) {
+        if (
+          enemy.state !== ENEMY_STATE.REPOSITION ||
+          enemy.stateTimer <= 0
+        ) {
+          if (type.id !== "light" && Math.random() < 0.35) {
+            enemy.strafeDirection *= -1;
+          }
+          enemy.state = ENEMY_STATE.REPOSITION;
+          enemy.stateTimer = 0.75 + Math.random() * 0.45;
+        }
+      } else if (
         range < ENEMY_AI.EMERGENCY_RANGE &&
         enemy.state !== ENEMY_STATE.RETREAT
       ) {
@@ -4547,17 +4610,111 @@
     return getCombatTargets().find((target) => target.role === role) ?? null;
   }
 
-  function chooseEnemyTarget(enemy) {
-    let chosen = null;
-    let chosenRange = Infinity;
-    for (const target of getCombatTargets()) {
-      const range = distance(enemy, target);
-      if (range < chosenRange) {
-        chosen = target;
-        chosenRange = range;
+  function getSegmentProximity(start, end, point) {
+    const segmentX = end.x - start.x;
+    const segmentZ = end.z - start.z;
+    const lengthSquared = segmentX * segmentX + segmentZ * segmentZ;
+    if (lengthSquared <= 0.0001) {
+      return {
+        t: 0,
+        distanceSquared:
+          (point.x - start.x) ** 2 + (point.z - start.z) ** 2
+      };
+    }
+    const t = Math.max(
+      0,
+      Math.min(
+        1,
+        ((point.x - start.x) * segmentX +
+          (point.z - start.z) * segmentZ) /
+          lengthSquared
+      )
+    );
+    const closestX = start.x + segmentX * t;
+    const closestZ = start.z + segmentZ * t;
+    return {
+      t,
+      distanceSquared:
+        (point.x - closestX) ** 2 + (point.z - closestZ) ** 2
+    };
+  }
+
+  function hasClearLineOfFire(enemy, target) {
+    for (const rock of rocks) {
+      const proximity = getSegmentProximity(enemy, target, rock);
+      const blockingRadius = rock.radius * 0.78 + 0.28;
+      if (
+        proximity.t > 0.035 &&
+        proximity.t < 0.98 &&
+        proximity.distanceSquared < blockingRadius * blockingRadius
+      ) {
+        return false;
       }
     }
-    return chosen ? { target: chosen, range: chosenRange } : null;
+
+    for (const other of enemies) {
+      if (other === enemy || getEnemyType(other).airborne) continue;
+      const proximity = getSegmentProximity(enemy, target, other);
+      const blockingRadius = 0.92 * getEnemyType(other).scale;
+      if (
+        proximity.t > 0.075 &&
+        proximity.t < 0.93 &&
+        proximity.distanceSquared < blockingRadius * blockingRadius
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function chooseEnemyTarget(enemy, combatTargets, targetLoads, dt) {
+    enemy.targetLockTimer = Math.max(0, (enemy.targetLockTimer ?? 0) - dt);
+    const type = getEnemyType(enemy);
+    const countsTowardLoad = type.id !== "guardian";
+    const lockedTarget = combatTargets.find(
+      (target) => target.role === enemy.targetRole
+    );
+    if (lockedTarget && enemy.targetLockTimer > 0) {
+      if (countsTowardLoad) {
+        targetLoads.set(
+          lockedTarget.role,
+          (targetLoads.get(lockedTarget.role) ?? 0) + 1
+        );
+      }
+      return { target: lockedTarget, range: distance(enemy, lockedTarget) };
+    }
+
+    let chosen = null;
+    let chosenRange = Infinity;
+    let chosenScore = Infinity;
+    for (const target of combatTargets) {
+      const range = distance(enemy, target);
+      const assignedEnemies = targetLoads.get(target.role) ?? 0;
+      let score = range + assignedEnemies * (countsTowardLoad ? 8 : 0);
+      if (type.kamikaze) score += target.health * 0.075;
+      if (target.role === enemy.targetRole) score -= 2.5;
+      if (score < chosenScore) {
+        chosen = target;
+        chosenRange = range;
+        chosenScore = score;
+      }
+    }
+    if (!chosen) return null;
+
+    enemy.targetRole = chosen.role;
+    enemy.targetLockTimer =
+      type.kamikaze
+        ? 0.85 + Math.random() * 0.35
+        : type.id === "artillery"
+          ? 2 + Math.random() * 0.8
+          : 1.35 + Math.random() * 0.65;
+    if (countsTowardLoad) {
+      targetLoads.set(
+        chosen.role,
+        (targetLoads.get(chosen.role) ?? 0) + 1
+      );
+    }
+    return { target: chosen, range: chosenRange };
   }
 
   function updateEnemyTurret(enemy, targetHeading, range, target, dt) {
@@ -4570,6 +4727,9 @@
     enemy.reload -= dt;
 
     if (enemy.reload > 0 || range >= type.fireRange) return false;
+    if (type.id !== "artillery" && !hasClearLineOfFire(enemy, target)) {
+      return false;
+    }
 
     const facingError = Math.abs(normalizeAngle(targetHeading - enemy.turretHeading));
     if (facingError <= type.fireAlignment) {
@@ -4679,10 +4839,19 @@
 
   function updateEnemies(dt) {
     const pendingDetonations = [];
+    const combatTargets = getCombatTargets();
+    const targetLoads = new Map(
+      combatTargets.map((target) => [target.role, 0])
+    );
     for (const enemy of enemies) {
       enemy.revealTimer = Math.max(0, (enemy.revealTimer ?? 0) - dt);
       enemy.revealFlash = Math.max(0, (enemy.revealFlash ?? 0) - dt);
-      const targetChoice = chooseEnemyTarget(enemy);
+      const targetChoice = chooseEnemyTarget(
+        enemy,
+        combatTargets,
+        targetLoads,
+        dt
+      );
       if (!targetChoice) continue;
       const { target, range } = targetChoice;
       const targetHeading = Math.atan2(
@@ -4691,6 +4860,10 @@
       );
       const type = getEnemyType(enemy);
       enemy.hitFlash = Math.max(0, enemy.hitFlash - dt);
+
+      if (type.id === "light") {
+        updateLightFlankIntent(enemy, target, dt);
+      }
 
       if (type.airborne) {
         updateDrone(enemy, targetHeading, range, target, dt);
@@ -4727,12 +4900,17 @@
         movementTarget.x - enemy.x,
         movementTarget.z - enemy.z
       );
+      const lineOfFireClear =
+        type.id === "artillery" ||
+        type.fireRange <= 0 ||
+        hasClearLineOfFire(enemy, target);
 
       updateEnemyMovement(
         enemy,
         movementHeading,
         movementRange,
-        dt
+        dt,
+        lineOfFireClear
       );
       updateEnemyTurret(enemy, targetHeading, range, target, dt);
     }

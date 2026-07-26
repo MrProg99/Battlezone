@@ -97,4 +97,5 @@ interpole le monde partagé reçu depuis `battlezone/rooms/<code>/world`.
 - Kamikaze à charge directe, mèche sonore et explosion pouvant provoquer des réactions en chaîne
 - Drone rapide qui plonge, attaque en rase-mottes sans s'arrêter, puis remonte
 - Vagues progressives, score, blindage et radar
+- IA coordonnée avec répartition coop, lignes de tir et manœuvres de flanc
 - Effets sonores synthétisés et esthétique d’écran CRT

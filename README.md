@@ -65,6 +65,7 @@ Ce premier jalon synchronise :
 - le départ de mission déclenché par l’hôte;
 - la disposition des rochers grâce à une graine de monde commune.
 - les vagues, les ennemis, leurs tourelles et leurs obus;
+- l'altitude et le cycle d'attaque des drones volants;
 - les tirs des deux joueurs et les dégâts infligés aux mêmes cibles;
 - le score, les éliminations et le blindage partagé;
 - la fin de mission commune si l’un des deux chars est détruit.
@@ -89,8 +90,9 @@ interpole le monde partagé reçu depuis `battlezone/rooms/<code>/world`.
 - Largage aérien du tank avec altimètre et impact au sol
 - Choix entre l’Éclaireur rapide à courte portée et le Bastion lent à longue portée
 - Conduite et tourelle indépendantes
-- Six ennemis : assaut, chasseur léger, artillerie, Gardien, Fantôme et Kamikaze
+- Sept ennemis : assaut, chasseur léger, artillerie, Gardien, Fantôme, Kamikaze et Drone
 - Obus d’artillerie en cloche avec zone d’impact, compte à rebours et dégâts de zone
 - Kamikaze à charge directe, mèche sonore et explosion pouvant provoquer des réactions en chaîne
+- Drone rapide qui plonge, attaque en rase-mottes sans s'arrêter, puis remonte
 - Vagues progressives, score, blindage et radar
 - Effets sonores synthétisés et esthétique d’écran CRT

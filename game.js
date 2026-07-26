@@ -61,6 +61,16 @@
   const KAMIKAZE_BLAST_RADIUS = 7;
   const KAMIKAZE_BLAST_DAMAGE = 52;
   const KAMIKAZE_FUSE_TIME = 0.8;
+  const DRONE_FLIGHT_STATE = Object.freeze({
+    CRUISING: "cruising",
+    DIVING: "diving",
+    STRAFING: "strafing",
+    CLIMBING: "climbing"
+  });
+  const DRONE_CRUISE_ALTITUDE = 5.2;
+  const DRONE_VERTICAL_SPEED = 3.35;
+  const DRONE_ATTACK_ALTITUDE = 0.95;
+  const DRONE_STRAFE_TIME = 1.15;
   const ENEMY_TYPES = Object.freeze({
     assault: Object.freeze({
       id: "assault",
@@ -181,6 +191,31 @@
       priority: false,
       support: true,
       kamikaze: true
+    }),
+    drone: Object.freeze({
+      id: "drone",
+      label: "DRONE",
+      code: "D",
+      health: 1,
+      speed: 4.8,
+      speedVariance: 0.55,
+      preferredRangeMin: 18,
+      preferredRangeMax: 27,
+      scale: 0.82,
+      hitRadius: 0.9,
+      chassisTurnRate: 1.75,
+      turretTurnRate: 2.6,
+      fireRange: 43,
+      fireAlignment: 0.15,
+      reloadBase: 3.4,
+      reloadMin: 2.5,
+      reloadJitter: 0.7,
+      shellSpeed: 22,
+      shellLifetime: 2.7,
+      score: 240,
+      static: false,
+      priority: false,
+      airborne: true
     }),
     artillery: Object.freeze({
       id: "artillery",
@@ -692,7 +727,8 @@
               enemies[i].x,
               enemies[i].z,
               removedType.priority ? COLORS.amber : COLORS.red,
-              24
+              24,
+              0.4 + (enemies[i].elevation ?? 0)
             );
           }
         }
@@ -720,7 +756,11 @@
         revealDuration: Number(snapshot.revealDuration) || 2.4,
         kamikazeArmed: Boolean(snapshot.kamikazeArmed),
         fuseTimer: Math.max(0, Number(snapshot.fuseTimer) || 0),
-        fuseDuration: Number(snapshot.fuseDuration) || KAMIKAZE_FUSE_TIME
+        fuseDuration: Number(snapshot.fuseDuration) || KAMIKAZE_FUSE_TIME,
+        elevation: Math.max(0, Number(snapshot.elevation) || 0),
+        flightState: snapshot.flightState || null,
+        flightTimer: Math.max(0, Number(snapshot.flightTimer) || 0),
+        attackCooldown: Math.max(0, Number(snapshot.attackCooldown) || 0)
       };
       if (!enemy) {
         enemy = {
@@ -803,6 +843,9 @@
       const target = enemy.networkTarget;
       enemy.x += (target.x - enemy.x) * blend;
       enemy.z += (target.z - enemy.z) * blend;
+      enemy.elevation =
+        (enemy.elevation ?? 0) +
+        (target.elevation - (enemy.elevation ?? 0)) * blend;
       enemy.heading = normalizeAngle(
         enemy.heading + normalizeAngle(target.heading - enemy.heading) * blend
       );
@@ -820,6 +863,9 @@
       enemy.revealTimer = Math.max(0, (enemy.revealTimer ?? 0) - dt);
       enemy.revealFlash = Math.max(0, (enemy.revealFlash ?? 0) - dt);
       enemy.kamikazeArmed = Boolean(target.kamikazeArmed);
+      enemy.flightState = target.flightState;
+      enemy.flightTimer = target.flightTimer;
+      enemy.attackCooldown = target.attackCooldown;
       enemy.fuseDuration = target.fuseDuration || KAMIKAZE_FUSE_TIME;
       enemy.fuseTimer = enemy.kamikazeArmed
         ? Math.max(
@@ -874,7 +920,11 @@
         fuseTimer: Number((enemy.fuseTimer ?? 0).toFixed(3)),
         fuseDuration: Number(
           (enemy.fuseDuration ?? KAMIKAZE_FUSE_TIME).toFixed(3)
-        )
+        ),
+        elevation: Number((enemy.elevation ?? 0).toFixed(3)),
+        flightState: enemy.flightState ?? "",
+        flightTimer: Number((enemy.flightTimer ?? 0).toFixed(3)),
+        attackCooldown: Number((enemy.attackCooldown ?? 0).toFixed(3))
       };
     }
 
@@ -1033,7 +1083,7 @@
   function orientedPoint(origin, localX, localY, localZ, angle) {
     return {
       x: origin.x + localX * Math.cos(angle) + localZ * Math.sin(angle),
-      y: localY,
+      y: (Number(origin.elevation) || 0) + localY,
       z: origin.z - localX * Math.sin(angle) + localZ * Math.cos(angle)
     };
   }
@@ -1442,6 +1492,162 @@
     }
   }
 
+  function drawDroneEnemy(enemy, type, color, fade) {
+    const scale = type.scale;
+    const diving = enemy.flightState === DRONE_FLIGHT_STATE.DIVING;
+    const strafing = enemy.flightState === DRONE_FLIGHT_STATE.STRAFING;
+    const attacking = diving || strafing;
+    const flightFade = fade;
+    const rotorPhase = performance.now() * 0.018 + enemy.id * 0.7;
+    const rotorCenters = [
+      [-1.48, -0.68],
+      [1.48, -0.68],
+      [-1.48, 0.72],
+      [1.48, 0.72]
+    ];
+    const armRoot = orientedPoint(enemy, 0, 0.43 * scale, 0, enemy.heading);
+
+    // Les bras passent derrière le fuselage opaque.
+    for (const [localX, localZ] of rotorCenters) {
+      const hub = orientedPoint(
+        enemy,
+        localX * scale,
+        0.43 * scale,
+        localZ * scale,
+        enemy.heading
+      );
+      drawTankEdge(armRoot, hub, color, flightFade * 0.8, 1.1);
+
+      const rotorRadius = 0.52 * scale;
+      const rotorPoints = [];
+      for (let i = 0; i < 8; i += 1) {
+        const angle = rotorPhase + i / 8 * TAU;
+        rotorPoints.push({
+          x: hub.x + Math.cos(angle) * rotorRadius,
+          y: hub.y,
+          z: hub.z + Math.sin(angle) * rotorRadius
+        });
+      }
+      for (let i = 0; i < rotorPoints.length; i += 1) {
+        drawTankEdge(
+          rotorPoints[i],
+          rotorPoints[(i + 1) % rotorPoints.length],
+          color,
+          flightFade * 0.62,
+          0.85
+        );
+      }
+      drawTankEdge(rotorPoints[0], rotorPoints[4], color, flightFade, 1.05);
+      drawTankEdge(rotorPoints[2], rotorPoints[6], color, flightFade, 1.05);
+    }
+
+    const body = buildTankVertices(enemy, enemy.heading, scale, [
+      [-0.72, 0.2, -0.62],
+      [0.72, 0.2, -0.62],
+      [1.02, 0.2, 0.08],
+      [0.48, 0.2, 0.82],
+      [-0.48, 0.2, 0.82],
+      [-1.02, 0.2, 0.08],
+      [-0.46, 0.68, -0.38],
+      [0.46, 0.68, -0.38],
+      [0.66, 0.68, 0.04],
+      [0.32, 0.68, 0.48],
+      [-0.32, 0.68, 0.48],
+      [-0.66, 0.68, 0.04]
+    ]);
+    drawTankFaces([{
+      points: body,
+      faces: [
+        [0, 1, 2, 3, 4, 5],
+        [6, 11, 10, 9, 8, 7],
+        [0, 6, 7, 1],
+        [1, 7, 8, 2],
+        [2, 8, 9, 3],
+        [3, 9, 10, 4],
+        [4, 10, 11, 5],
+        [5, 11, 6, 0]
+      ],
+      lineWidth: 1.25
+    }], color, flightFade, 0.99);
+
+    const skids = buildTankVertices(enemy, enemy.heading, scale, [
+      [-0.62, 0.21, -0.42], [-0.78, 0.02, -0.58], [-0.78, 0.02, 0.6],
+      [0.62, 0.21, -0.42], [0.78, 0.02, -0.58], [0.78, 0.02, 0.6]
+    ]);
+    drawTankEdges(skids, [[0, 1], [1, 2], [3, 4], [4, 5]], color, flightFade, 1.05);
+
+    if (attacking) {
+      const deploy = strafing
+        ? 1
+        : Math.max(0.25, 1 - (enemy.elevation ?? 0) / DRONE_CRUISE_ALTITUDE);
+      const barrelStart = orientedPoint(
+        enemy,
+        0,
+        0.34 * scale,
+        0.44 * scale,
+        enemy.turretHeading
+      );
+      const barrelEnd = orientedPoint(
+        enemy,
+        0,
+        0.34 * scale,
+        (0.44 + 1.75 * deploy) * scale,
+        enemy.turretHeading
+      );
+      drawTankEdge(barrelStart, barrelEnd, color, flightFade, 1.45);
+
+      const groundOrigin = { x: enemy.x, z: enemy.z, elevation: 0 };
+      for (const lane of [-0.82, 0.82]) {
+        for (let segment = -1; segment < 4; segment += 2) {
+          const guideStart = orientedPoint(
+            groundOrigin,
+            lane * scale,
+            0.025,
+            segment * 1.7 * scale,
+            enemy.heading
+          );
+          const guideEnd = orientedPoint(
+            groundOrigin,
+            lane * scale,
+            0.025,
+            (segment + 1) * 1.7 * scale,
+            enemy.heading
+          );
+          line3d(
+            guideStart,
+            guideEnd,
+            COLORS.amber,
+            1,
+            fade * (strafing ? 0.78 : 0.38)
+          );
+        }
+      }
+
+      const ringRadius = (1.25 + Math.sin(performance.now() * 0.009) * 0.12) * scale;
+      for (let i = 0; i < 16; i += 2) {
+        const angleA = i / 16 * TAU;
+        const angleB = (i + 1) / 16 * TAU;
+        line3d(
+          { x: enemy.x + Math.sin(angleA) * ringRadius, y: 0.025, z: enemy.z + Math.cos(angleA) * ringRadius },
+          { x: enemy.x + Math.sin(angleB) * ringRadius, y: 0.025, z: enemy.z + Math.cos(angleB) * ringRadius },
+          COLORS.amber,
+          1,
+          fade * (strafing ? 0.72 : 0.42)
+        );
+      }
+    }
+
+    if ((enemy.elevation ?? 0) > 0.35) {
+      line3d(
+        { x: enemy.x, y: 0.03, z: enemy.z },
+        { x: enemy.x, y: enemy.elevation, z: enemy.z },
+        color,
+        0.8,
+        fade * (attacking ? 0.38 : 0.14)
+      );
+    }
+  }
+
   function drawArtilleryEnemy(enemy, color, fade) {
     for (let i = 0; i < 4; i += 1) {
       const angle = enemy.heading + Math.PI / 4 + i * Math.PI / 2;
@@ -1641,6 +1847,15 @@
       minimum = 0.35;
       maximum = 1.28;
     }
+    if (
+      type.airborne &&
+      (enemy.flightState === DRONE_FLIGHT_STATE.DIVING ||
+        enemy.flightState === DRONE_FLIGHT_STATE.STRAFING)
+    ) {
+      period = 520;
+      minimum = 0.48;
+      maximum = 1.24;
+    }
 
     const phase = (Number(enemy.id) || 0) * 1.73;
     const wave =
@@ -1668,11 +1883,12 @@
     const centerProjection = project({
       x: enemy.x,
       y:
-        type.id === "artillery"
+        (enemy.elevation ?? 0) +
+        (type.id === "artillery"
           ? 1
           : type.id === "guardian"
             ? 1.18 * type.scale
-            : 0.85 * type.scale,
+            : 0.85 * type.scale),
       z: enemy.z
     });
     if (!centerProjection) return;
@@ -1700,6 +1916,8 @@
       drawGuardianEnemy(enemy, type, modelColor, fade);
     } else if (type.kamikaze) {
       drawKamikazeEnemy(enemy, type, modelColor, fade);
+    } else if (type.id === "drone") {
+      drawDroneEnemy(enemy, type, modelColor, fade);
     } else if (type.id === "artillery") {
       drawArtilleryEnemy(enemy, modelColor, fade);
     } else {
@@ -1718,7 +1936,7 @@
     ctx.fillStyle = color;
     ctx.globalAlpha = fade * 0.88;
     ctx.fillText(
-      `${type.code}-${String(enemy.id).padStart(2, "0")} ${type.label}  ${Math.round(range * 10)}m`,
+      `${type.code}-${String(enemy.id).padStart(2, "0")} ${type.label}  ${Math.round(range * 10)}m${type.airborne && (enemy.elevation ?? 0) > 0.2 ? `  ALT ${Math.round(enemy.elevation * 10)}m` : ""}`,
       centerProjection.x,
       labelY
     );
@@ -2340,6 +2558,28 @@
         ctx.closePath();
         ctx.fill();
         ctx.globalAlpha = 1;
+      } else if (type.airborne) {
+        const attackRun =
+          enemy.flightState === DRONE_FLIGHT_STATE.DIVING ||
+          enemy.flightState === DRONE_FLIGHT_STATE.STRAFING;
+        const pulse =
+          4.5 +
+          Math.sin(performance.now() * (attackRun ? 0.026 : 0.014) + enemy.id) * 0.8;
+        ctx.save();
+        ctx.translate(markerX, markerY);
+        ctx.rotate(performance.now() * 0.0018 + enemy.id);
+        ctx.strokeStyle = attackRun ? COLORS.amber : COLORS.red;
+        ctx.globalAlpha = attackRun ? 1 : 0.82;
+        ctx.beginPath();
+        ctx.arc(0, 0, pulse, 0, TAU);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(-5, 0);
+        ctx.lineTo(5, 0);
+        ctx.moveTo(0, -5);
+        ctx.lineTo(0, 5);
+        ctx.stroke();
+        ctx.restore();
       } else if (type.id === "ghost") {
         const pulse = 4.5 + Math.sin(performance.now() * 0.012) * 1.2;
         ctx.strokeStyle = COLORS.red;
@@ -2691,6 +2931,9 @@
     if (player.wave >= 5 && index === count - 4) {
       return ENEMY_TYPES.kamikaze;
     }
+    if (player.wave >= 6 && index === count - 5) {
+      return ENEMY_TYPES.drone;
+    }
     if (index % 3 === 1) return ENEMY_TYPES.light;
     return ENEMY_TYPES.assault;
   }
@@ -2737,7 +2980,12 @@
       revealFlash: 0,
       kamikazeArmed: false,
       fuseTimer: 0,
-      fuseDuration: KAMIKAZE_FUSE_TIME
+      fuseDuration: KAMIKAZE_FUSE_TIME,
+      elevation: type.airborne ? DRONE_CRUISE_ALTITUDE : 0,
+      flightState: type.airborne ? DRONE_FLIGHT_STATE.CRUISING : null,
+      flightTimer: 0,
+      attackCooldown: type.airborne ? 1.5 + Math.random() * 2.2 : 0,
+      attackFired: false
     };
   }
 
@@ -2806,12 +3054,16 @@
       const minimumRange =
         type.id === "artillery"
           ? 44
+          : type.id === "drone"
+            ? 36
           : type.id === "kamikaze"
             ? 38
             : 30;
       const maximumRange =
         type.id === "artillery"
           ? 66
+          : type.id === "drone"
+            ? 62
           : type.id === "guardian"
             ? 52
             : type.id === "ghost"
@@ -2988,14 +3240,14 @@
     oscillator.stop(now + duration);
   }
 
-  function burst(x, z, color, count = 14) {
+  function burst(x, z, color, count = 14, baseY = 0.4) {
     for (let i = 0; i < count; i += 1) {
       const angle = Math.random() * TAU;
       const speed = 1.8 + Math.random() * 7;
       const life = 0.35 + Math.random() * 0.55;
       particles.push({
         x,
-        y: 0.4 + Math.random() * 0.7,
+        y: baseY + Math.random() * 0.7,
         z,
         vx: Math.cos(angle) * speed,
         vy: 1.8 + Math.random() * 5,
@@ -3037,7 +3289,7 @@
 
       tankDebris.push({
         x: enemy.x + localX * headingCos + localZ * headingSin,
-        y: layout.y * type.scale,
+        y: (enemy.elevation ?? 0) + layout.y * type.scale,
         z: enemy.z - localX * headingSin + localZ * headingCos,
         vx: velocityX * headingCos + velocityZ * headingSin,
         vy: 3.1 + layout.lift + random() * 3.4,
@@ -3230,11 +3482,14 @@
     const type = getEnemyType(enemy);
     const accuracy = Math.min(0.18, 0.08 + distance(target, enemy) * 0.0015);
     const shotYaw = enemy.turretHeading + (Math.random() - 0.5) * accuracy;
+    const muzzleY = type.airborne
+      ? (enemy.elevation ?? 0) + 0.34 * type.scale
+      : 0.72;
     shells.push({
       id: ++shellSerial,
       kind: "direct",
       x: enemy.x + Math.sin(shotYaw) * 1.7,
-      y: 0.72,
+      y: muzzleY,
       z: enemy.z + Math.cos(shotYaw) * 1.7,
       vx: Math.sin(shotYaw) * type.shellSpeed,
       vz: Math.cos(shotYaw) * type.shellSpeed,
@@ -3389,6 +3644,7 @@
       if (movingObstacles) {
         for (const obstacle of movingObstacles) {
           if (obstacle === ignoredObstacle) continue;
+          if ((obstacle.elevation ?? 0) > 0.45) continue;
           const obstacleType = getEnemyType(obstacle);
           corrected =
             pushOutside(obstacle, 1.12 * obstacleType.scale) ||
@@ -3597,6 +3853,159 @@
     enemy.heading = normalizeAngle(enemy.heading + enemy.strafeDirection * 0.32);
   }
 
+  function isDroneAttackPathClear(enemy, heading, lookAhead = 9) {
+    const type = getEnemyType(enemy);
+    const radius = 1.05 * type.scale;
+    for (let step = 1.5; step <= lookAhead; step += 1.5) {
+      const sampleX = enemy.x + Math.sin(heading) * step;
+      const sampleZ = enemy.z + Math.cos(heading) * step;
+      if (circleCollision(sampleX, sampleZ, radius)) return false;
+    }
+    return true;
+  }
+
+  function moveDroneForward(
+    enemy,
+    desiredHeading,
+    dt,
+    speedScale = 1,
+    turnScale = 1
+  ) {
+    const type = getEnemyType(enemy);
+    enemy.heading = turnTowardAngle(
+      enemy.heading,
+      desiredHeading,
+      (type.chassisTurnRate ?? ENEMY_AI.CHASSIS_TURN_RATE) * turnScale * dt
+    );
+    const moveSpeed = enemy.speed * speedScale;
+    const worldEdge = WORLD_LIMIT - 2;
+    const nextX = enemy.x + Math.sin(enemy.heading) * moveSpeed * dt;
+    const nextZ = enemy.z + Math.cos(enemy.heading) * moveSpeed * dt;
+    const clampedX = Math.max(-worldEdge, Math.min(worldEdge, nextX));
+    const clampedZ = Math.max(-worldEdge, Math.min(worldEdge, nextZ));
+    if (clampedX !== nextX || clampedZ !== nextZ) {
+      enemy.strafeDirection *= -1;
+      enemy.heading = normalizeAngle(enemy.heading + enemy.strafeDirection * 0.5);
+    }
+    enemy.x = clampedX;
+    enemy.z = clampedZ;
+  }
+
+  function updateDroneCruiseMovement(enemy, targetHeading, range, dt) {
+    let flightHeading;
+    if (range > enemy.preferredRange + 4) {
+      flightHeading = targetHeading + enemy.strafeDirection * 0.28;
+    } else if (range < Math.max(10, enemy.preferredRange - 6)) {
+      flightHeading = targetHeading + Math.PI + enemy.strafeDirection * 0.42;
+    } else {
+      flightHeading = targetHeading + enemy.strafeDirection * 1.18;
+    }
+    moveDroneForward(enemy, flightHeading, dt);
+  }
+
+  function updateDrone(enemy, targetHeading, range, target, dt) {
+    const type = getEnemyType(enemy);
+    enemy.flightState ||= DRONE_FLIGHT_STATE.CRUISING;
+    enemy.elevation = Math.max(0, Number(enemy.elevation) || 0);
+    enemy.attackCooldown = Math.max(0, (enemy.attackCooldown ?? 0) - dt);
+    enemy.turretHeading = turnTowardAngle(
+      enemy.turretHeading,
+      targetHeading,
+      type.turretTurnRate * dt
+    );
+
+    switch (enemy.flightState) {
+      case DRONE_FLIGHT_STATE.DIVING:
+        moveDroneForward(enemy, targetHeading, dt, 0.94, 0.65);
+        if (
+          enemy.elevation < 2 &&
+          !isDroneAttackPathClear(enemy, enemy.heading, 6)
+        ) {
+          enemy.flightState = DRONE_FLIGHT_STATE.CLIMBING;
+          enemy.attackCooldown = 1.4;
+          break;
+        }
+        enemy.elevation = Math.max(
+          DRONE_ATTACK_ALTITUDE,
+          enemy.elevation - DRONE_VERTICAL_SPEED * dt
+        );
+        if (enemy.elevation <= DRONE_ATTACK_ALTITUDE) {
+          enemy.flightState = DRONE_FLIGHT_STATE.STRAFING;
+          enemy.flightTimer = DRONE_STRAFE_TIME;
+          enemy.reload = Math.min(enemy.reload, 0.18);
+          enemy.attackFired = false;
+          tone(185, 0.08, "square", 0.018, 45);
+        }
+        break;
+
+      case DRONE_FLIGHT_STATE.STRAFING: {
+        enemy.elevation = DRONE_ATTACK_ALTITUDE;
+        moveDroneForward(enemy, targetHeading, dt, 1.12, 0.48);
+        enemy.flightTimer = Math.max(0, (enemy.flightTimer ?? 0) - dt);
+        if (!enemy.attackFired) {
+          enemy.attackFired = updateEnemyTurret(
+            enemy,
+            targetHeading,
+            range,
+            target,
+            dt
+          );
+          if (enemy.attackFired) {
+            enemy.flightTimer = Math.min(enemy.flightTimer, 0.42);
+          }
+        }
+        if (
+          enemy.flightTimer <= 0 ||
+          range < 4.5 ||
+          !isDroneAttackPathClear(enemy, enemy.heading, 3.5)
+        ) {
+          enemy.flightState = DRONE_FLIGHT_STATE.CLIMBING;
+          enemy.attackCooldown = 2.2 + Math.random() * 1.2;
+        }
+        break;
+      }
+
+      case DRONE_FLIGHT_STATE.CLIMBING:
+        moveDroneForward(
+          enemy,
+          enemy.heading + enemy.strafeDirection * 0.16,
+          dt,
+          1,
+          0.45
+        );
+        enemy.elevation = Math.min(
+          DRONE_CRUISE_ALTITUDE,
+          enemy.elevation + DRONE_VERTICAL_SPEED * dt
+        );
+        if (enemy.elevation >= DRONE_CRUISE_ALTITUDE) {
+          enemy.flightState = DRONE_FLIGHT_STATE.CRUISING;
+          enemy.flightTimer = 0;
+          enemy.attackFired = false;
+        }
+        break;
+
+      case DRONE_FLIGHT_STATE.CRUISING:
+      default:
+        updateDroneCruiseMovement(enemy, targetHeading, range, dt);
+        enemy.elevation = Math.min(
+          DRONE_CRUISE_ALTITUDE,
+          enemy.elevation + DRONE_VERTICAL_SPEED * dt
+        );
+        if (
+          enemy.attackCooldown <= 0 &&
+          range > 11 &&
+          range < type.fireRange - 2 &&
+          isDroneAttackPathClear(enemy, targetHeading, 10)
+        ) {
+          enemy.flightState = DRONE_FLIGHT_STATE.DIVING;
+          enemy.flightTimer = 0;
+          enemy.attackFired = false;
+          tone(310, 0.1, "sawtooth", 0.016, -90);
+        }
+        break;
+    }
+  }
+
   function separateEnemy(enemy, pushX, pushZ) {
     const type = getEnemyType(enemy);
     if (type.static) return false;
@@ -3623,6 +4032,9 @@
         const second = enemies[b];
         const firstType = getEnemyType(first);
         const secondType = getEnemyType(second);
+        if ((first.elevation ?? 0) > 0.45 || (second.elevation ?? 0) > 0.45) {
+          continue;
+        }
         const minimumDistance =
           1.12 * firstType.scale +
           1.12 * secondType.scale +
@@ -3727,7 +4139,7 @@
     );
     enemy.reload -= dt;
 
-    if (enemy.reload > 0 || range >= type.fireRange) return;
+    if (enemy.reload > 0 || range >= type.fireRange) return false;
 
     const facingError = Math.abs(normalizeAngle(targetHeading - enemy.turretHeading));
     if (facingError <= type.fireAlignment) {
@@ -3736,7 +4148,9 @@
       enemy.reload =
         Math.max(type.reloadMin, type.reloadBase - player.wave * 0.08) +
         Math.random() * type.reloadJitter;
+      return true;
     }
+    return false;
   }
 
   function chooseGuardianAnchor(guardian) {
@@ -3744,7 +4158,8 @@
       enemy !== guardian &&
       getEnemyType(enemy).id !== "guardian" &&
       getEnemyType(enemy).id !== "ghost" &&
-      getEnemyType(enemy).id !== "kamikaze"
+      getEnemyType(enemy).id !== "kamikaze" &&
+      getEnemyType(enemy).id !== "drone"
     );
     if (candidates.length === 0) return null;
 
@@ -3783,11 +4198,19 @@
         enemy.shieldCharge = 0;
         enemy.shieldCooldown = 0;
       }
+      if (enemyType.airborne) {
+        enemy.shieldSourceId = 0;
+        enemy.shieldCharge = 0;
+        enemy.shieldCooldown = 0;
+      }
     }
 
     for (const target of enemies) {
       const targetType = getEnemyType(target);
       if (targetType.id === "guardian" || targetType.id === "ghost") {
+        continue;
+      }
+      if (targetType.airborne) {
         continue;
       }
       let closestGuardian = null;
@@ -3838,6 +4261,11 @@
       );
       const type = getEnemyType(enemy);
       enemy.hitFlash = Math.max(0, enemy.hitFlash - dt);
+
+      if (type.airborne) {
+        updateDrone(enemy, targetHeading, range, target, dt);
+        continue;
+      }
 
       if (type.kamikaze) {
         if (
@@ -4021,7 +4449,8 @@
       enemy.x,
       enemy.z,
       type.priority ? COLORS.amber : COLORS.red,
-      32
+      32,
+      0.4 + (enemy.elevation ?? 0)
     );
     screenShake = Math.max(screenShake, 9);
     tone(58, 0.34, "sawtooth", 0.08, -20);
@@ -4058,7 +4487,8 @@
     for (const nearbyEnemy of [...enemies]) {
       const blastDistance = Math.hypot(
         enemy.x - nearbyEnemy.x,
-        enemy.z - nearbyEnemy.z
+        enemy.z - nearbyEnemy.z,
+        nearbyEnemy.elevation ?? 0
       );
       if (blastDistance > KAMIKAZE_BLAST_RADIUS) continue;
       if (absorbEnemyShield(nearbyEnemy, enemy.x, enemy.z)) continue;
@@ -4145,6 +4575,18 @@
     return true;
   }
 
+  function shellHitsEnemy(shell, enemy) {
+    const type = getEnemyType(enemy);
+    const hitRadius = 1.45 * type.hitRadius;
+    if (Math.hypot(shell.x - enemy.x, shell.z - enemy.z) >= hitRadius) {
+      return false;
+    }
+    if (!type.airborne) return true;
+    const centerY = (enemy.elevation ?? 0) + 0.48 * type.scale;
+    const verticalRadius = 0.76 * type.scale;
+    return Math.abs((shell.y ?? 0.86) - centerY) < verticalRadius;
+  }
+
   function updateShells(dt) {
     for (let i = shells.length - 1; i >= 0; i -= 1) {
       const shell = shells[i];
@@ -4170,10 +4612,9 @@
       }
 
       if (shell.owner === "player" || shell.owner === "ally") {
-        const enemyIndex = enemies.findIndex((enemy) => {
-          const hitRadius = 1.45 * getEnemyType(enemy).hitRadius;
-          return Math.hypot(shell.x - enemy.x, shell.z - enemy.z) < hitRadius;
-        });
+        const enemyIndex = enemies.findIndex((enemy) =>
+          shellHitsEnemy(shell, enemy)
+        );
         if (enemyIndex !== -1) {
           const enemy = enemies[enemyIndex];
           const type = getEnemyType(enemy);

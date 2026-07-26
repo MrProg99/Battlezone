@@ -2373,6 +2373,143 @@
     ctx.restore();
   }
 
+  function getCockpitLayout() {
+    const compact = width < 700 || height < 560;
+    const bottomHeight = Math.max(
+      compact ? 100 : 92,
+      Math.min(compact ? 112 : 132, height * 0.17)
+    );
+    const sideWidth = Math.max(
+      compact ? 22 : 48,
+      Math.min(compact ? 34 : 82, width * (compact ? 0.065 : 0.065))
+    );
+    const radarRadius = Math.max(
+      28,
+      Math.min(compact ? 34 : 45, bottomHeight * 0.35)
+    );
+    return {
+      compact,
+      bottomHeight,
+      consoleTop: height - bottomHeight,
+      sideWidth,
+      topRail: compact ? 16 : 21,
+      radarRadius,
+      radarX: width - sideWidth - radarRadius - (compact ? 7 : 14),
+      radarY: height - bottomHeight * 0.52
+    };
+  }
+
+  function drawCockpitFrame(layout) {
+    const {
+      compact,
+      consoleTop,
+      sideWidth,
+      topRail,
+      bottomHeight
+    } = layout;
+    const damaged = player.health < 30;
+    const warningPulse = 0.55 + Math.sin(performance.now() * 0.012) * 0.2;
+    const edgeColor = damaged ? COLORS.red : COLORS.dim;
+    const drawPanel = (points, fill = "rgba(1, 6, 3, 0.965)") => {
+      ctx.fillStyle = fill;
+      ctx.beginPath();
+      ctx.moveTo(points[0][0], points[0][1]);
+      for (let i = 1; i < points.length; i += 1) {
+        ctx.lineTo(points[i][0], points[i][1]);
+      }
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    };
+
+    ctx.save();
+    ctx.strokeStyle = edgeColor;
+    ctx.lineWidth = damaged ? 1.35 : 1;
+    ctx.globalAlpha = 1;
+
+    drawPanel([
+      [0, 0],
+      [width, 0],
+      [width, topRail],
+      [width * 0.7, topRail],
+      [width * 0.67, topRail * 0.58],
+      [width * 0.33, topRail * 0.58],
+      [width * 0.3, topRail],
+      [0, topRail]
+    ]);
+
+    drawPanel([
+      [0, topRail],
+      [sideWidth + (compact ? 8 : 18), topRail],
+      [sideWidth, height * 0.32],
+      [sideWidth * 0.72, consoleTop - 36],
+      [sideWidth + 10, consoleTop + 12],
+      [0, consoleTop + 22]
+    ]);
+    drawPanel([
+      [width, topRail],
+      [width - sideWidth - (compact ? 8 : 18), topRail],
+      [width - sideWidth, height * 0.32],
+      [width - sideWidth * 0.72, consoleTop - 36],
+      [width - sideWidth - 10, consoleTop + 12],
+      [width, consoleTop + 22]
+    ]);
+
+    drawPanel([
+      [0, consoleTop + 14],
+      [width * 0.3, consoleTop],
+      [width * 0.38, consoleTop + 20],
+      [width * 0.62, consoleTop + 20],
+      [width * 0.7, consoleTop],
+      [width, consoleTop + 14],
+      [width, height],
+      [0, height]
+    ], "rgba(1, 7, 4, 0.975)");
+
+    ctx.globalAlpha = 0.25;
+    ctx.strokeStyle = COLORS.green;
+    ctx.beginPath();
+    ctx.moveTo(sideWidth + 7, topRail + 4);
+    ctx.lineTo(sideWidth * 0.83, consoleTop - 34);
+    ctx.lineTo(sideWidth + 17, consoleTop + 17);
+    ctx.moveTo(width - sideWidth - 7, topRail + 4);
+    ctx.lineTo(width - sideWidth * 0.83, consoleTop - 34);
+    ctx.lineTo(width - sideWidth - 17, consoleTop + 17);
+    ctx.moveTo(0, consoleTop + 22);
+    ctx.lineTo(width * 0.3, consoleTop + 8);
+    ctx.moveTo(width * 0.7, consoleTop + 8);
+    ctx.lineTo(width, consoleTop + 22);
+    ctx.stroke();
+
+    ctx.fillStyle = damaged ? COLORS.red : COLORS.green;
+    ctx.globalAlpha = damaged ? warningPulse : 0.38;
+    const bolts = [
+      [sideWidth * 0.46, topRail + 18],
+      [width - sideWidth * 0.46, topRail + 18],
+      [sideWidth * 0.48, consoleTop - 18],
+      [width - sideWidth * 0.48, consoleTop - 18],
+      [width * 0.3, consoleTop + 12],
+      [width * 0.7, consoleTop + 12]
+    ];
+    for (const [x, y] of bolts) {
+      ctx.beginPath();
+      ctx.arc(x, y, compact ? 1.5 : 2, 0, TAU);
+      ctx.fill();
+    }
+
+    ctx.globalAlpha = 0.16;
+    ctx.strokeStyle = COLORS.green;
+    for (let y = consoleTop + 30; y < height; y += 13) {
+      ctx.beginPath();
+      ctx.moveTo(sideWidth * 0.55, y);
+      ctx.lineTo(width * 0.28, y - bottomHeight * 0.04);
+      ctx.moveTo(width * 0.72, y - bottomHeight * 0.04);
+      ctx.lineTo(width - sideWidth * 0.55, y);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   function drawCockpit() {
     const tank = getPlayerTank();
     const light = tank.id === "scout";
@@ -2438,6 +2575,8 @@
       ctx.fill();
       ctx.stroke();
     };
+
+    drawCockpitFrame(getCockpitLayout());
 
     ctx.save();
     ctx.fillStyle = dark;
@@ -2575,15 +2714,28 @@
   }
 
   function drawRadar() {
-    const compact = width < 560;
-    const radius = compact ? 44 : 58;
-    const x = width - radius - (compact ? 13 : 28);
-    const y = radius + (compact ? 13 : 28);
+    const layout = getCockpitLayout();
+    const { compact, radarRadius: radius, radarX: x, radarY: y } = layout;
     const range = 48;
     const yaw = player.heading + player.turretOffset;
 
     ctx.save();
     ctx.translate(x, y);
+    ctx.fillStyle = "rgba(1, 5, 3, 0.98)";
+    ctx.strokeStyle = COLORS.dim;
+    ctx.lineWidth = 1.15;
+    ctx.beginPath();
+    for (let i = 0; i < 8; i += 1) {
+      const angle = Math.PI / 8 + i / 8 * TAU;
+      const bezelRadius = radius + (compact ? 7 : 10);
+      const px = Math.cos(angle) * bezelRadius;
+      const py = Math.sin(angle) * bezelRadius;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
     ctx.strokeStyle = "rgba(120, 255, 154, 0.5)";
     ctx.fillStyle = "rgba(2, 12, 6, 0.74)";
     ctx.lineWidth = 1;
@@ -2719,58 +2871,251 @@
     ctx.restore();
 
     ctx.fillStyle = COLORS.green;
-    ctx.font = "9px Courier New";
+    ctx.font = `${compact ? 7 : 9}px Courier New`;
     ctx.textAlign = "center";
-    ctx.fillText("RADAR // 480m", x, y + radius + 14);
+    ctx.fillText("RADAR // 480m", x, y + radius + (compact ? 10 : 14));
+  }
+
+  function drawLinearCockpitGauge(
+    x,
+    y,
+    gaugeWidth,
+    gaugeHeight,
+    label,
+    valueText,
+    progress,
+    color,
+    compact
+  ) {
+    const segments = compact ? 8 : 10;
+    const innerX = x + 5;
+    const innerWidth = gaugeWidth - 10;
+    const gap = compact ? 1.5 : 2;
+    const segmentWidth = (innerWidth - gap * (segments - 1)) / segments;
+    const barY = y + gaugeHeight - (compact ? 7 : 9);
+    const barHeight = compact ? 3 : 4;
+    const activeSegments = Math.ceil(Math.max(0, Math.min(1, progress)) * segments);
+
+    ctx.save();
+    ctx.fillStyle = "rgba(1, 5, 3, 0.96)";
+    ctx.strokeStyle = "rgba(46, 169, 92, 0.48)";
+    ctx.lineWidth = 1;
+    ctx.fillRect(x, y, gaugeWidth, gaugeHeight);
+    ctx.strokeRect(x, y, gaugeWidth, gaugeHeight);
+    ctx.font = `${compact ? 7 : 8}px Courier New`;
+    ctx.textAlign = "left";
+    ctx.fillStyle = color;
+    ctx.fillText(label, x + 5, y + (compact ? 9 : 11));
+    ctx.textAlign = "right";
+    ctx.fillText(valueText, x + gaugeWidth - 5, y + (compact ? 9 : 11));
+    for (let i = 0; i < segments; i += 1) {
+      ctx.globalAlpha = i < activeSegments ? 0.92 : 0.14;
+      ctx.fillRect(
+        innerX + i * (segmentWidth + gap),
+        barY,
+        segmentWidth,
+        barHeight
+      );
+    }
+    ctx.restore();
+  }
+
+  function drawTurretCockpitGauge(layout, tank) {
+    const { compact } = layout;
+    const centerX = width * 0.5;
+    const centerY = height - (compact ? 8 : 10);
+    const radius = compact ? 43 : 63;
+    const normalizedOffset = Math.max(-1, Math.min(1, player.turretOffset / Math.PI));
+    const needleAngle = Math.PI * 1.5 + normalizedOffset * Math.PI * 0.5;
+    const aligned = Math.abs(player.turretOffset) < 0.04;
+    const ready = player.reload <= 0;
+    const reloadProgress = ready
+      ? 1
+      : Math.max(0, 1 - player.reload / tank.reloadTime);
+    const needleColor = aligned ? COLORS.amber : COLORS.green;
+
+    ctx.save();
+    ctx.fillStyle = "rgba(1, 5, 3, 0.96)";
+    ctx.strokeStyle = "rgba(46, 169, 92, 0.55)";
+    ctx.lineWidth = 1.1;
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, radius + 8, Math.PI, TAU);
+    ctx.lineTo(centerX + radius + 8, centerY);
+    ctx.lineTo(centerX - radius - 8, centerY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.globalAlpha = 0.55;
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, radius, Math.PI, TAU);
+    ctx.stroke();
+    for (let i = 0; i <= 10; i += 1) {
+      const angle = Math.PI + i / 10 * Math.PI;
+      const inner = radius - (i === 5 ? 8 : 4);
+      ctx.beginPath();
+      ctx.moveTo(centerX + Math.cos(angle) * inner, centerY + Math.sin(angle) * inner);
+      ctx.lineTo(centerX + Math.cos(angle) * radius, centerY + Math.sin(angle) * radius);
+      ctx.stroke();
+    }
+
+    ctx.strokeStyle = ready ? COLORS.amber : COLORS.green;
+    ctx.globalAlpha = 0.85;
+    ctx.lineWidth = compact ? 2 : 2.5;
+    ctx.beginPath();
+    ctx.arc(
+      centerX,
+      centerY,
+      radius - 9,
+      Math.PI,
+      Math.PI + Math.PI * reloadProgress
+    );
+    ctx.stroke();
+
+    ctx.strokeStyle = needleColor;
+    ctx.globalAlpha = 1;
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(centerX, centerY);
+    ctx.lineTo(
+      centerX + Math.cos(needleAngle) * (radius - 13),
+      centerY + Math.sin(needleAngle) * (radius - 13)
+    );
+    ctx.stroke();
+    ctx.fillStyle = needleColor;
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, compact ? 2.5 : 3.5, 0, TAU);
+    ctx.fill();
+
+    if (alignmentPulse > 0) {
+      ctx.globalAlpha = Math.min(1, alignmentPulse * 1.8);
+      ctx.strokeStyle = COLORS.amber;
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, radius + alignmentPulse * 10, Math.PI, TAU);
+      ctx.stroke();
+    }
+
+    ctx.globalAlpha = 1;
+    ctx.textAlign = "center";
+    ctx.font = `${compact ? 7 : 8}px Courier New`;
+    ctx.fillStyle = needleColor;
+    ctx.fillText("TOURELLE", centerX, centerY - (compact ? 17 : 23));
+    ctx.fillStyle = ready ? COLORS.amber : COLORS.green;
+    ctx.fillText(
+      ready ? "CANON PRET" : `CHARGE ${Math.round(reloadProgress * 100)}%`,
+      centerX,
+      centerY - (compact ? 7 : 11)
+    );
+    ctx.restore();
   }
 
   function drawHud() {
-    const margin = width < 560 ? 14 : 28;
+    const layout = getCockpitLayout();
+    const { compact, consoleTop, sideWidth, radarX, radarRadius } = layout;
     const tank = getPlayerTank();
     const range = Math.round(tank.shellSpeed * tank.shellLifetime * 10);
+    const coop = playMode !== "solo" && networkSnapshot.connected;
+    const allyHealth = networkSnapshot.role === "host"
+      ? coopHealth.guest
+      : coopHealth.host;
+
     ctx.save();
-    ctx.font = "11px Courier New";
-    ctx.textAlign = "left";
+    ctx.font = `${compact ? 7 : 9}px Courier New`;
     ctx.fillStyle = COLORS.amber;
-    ctx.fillText(`${tank.label} // PORTÉE ${range}m`, margin, 30);
+    ctx.textAlign = "left";
+    ctx.fillText(
+      compact ? `${tank.label} ${range}m` : `${tank.label} // PORTEE ${range}m`,
+      sideWidth + (compact ? 5 : 12),
+      compact ? 12 : 15
+    );
     ctx.fillStyle = COLORS.green;
-    ctx.fillText(`SCORE ${String(player.score).padStart(6, "0")}`, margin, 47);
-    ctx.fillText(`VAGUE ${String(player.wave).padStart(2, "0")}`, margin, 64);
-    ctx.fillStyle = COLORS.red;
-    ctx.fillText(`CIBLES ${String(enemies.length).padStart(2, "0")}`, margin, 81);
-    if (playMode !== "solo" && networkSnapshot.connected) {
-      ctx.fillStyle = COLORS.cyan;
-      ctx.fillText(
-        `COOP ${networkSnapshot.playerCount}/2 // ${networkSnapshot.roomCode}`,
-        margin,
-        98
+    ctx.textAlign = "center";
+    ctx.fillText(
+      compact
+        ? `S${String(player.score).padStart(5, "0")} V${String(player.wave).padStart(2, "0")} C${String(enemies.length).padStart(2, "0")}`
+        : `SCORE ${String(player.score).padStart(6, "0")} // VAGUE ${String(player.wave).padStart(2, "0")} // CIBLES ${String(enemies.length).padStart(2, "0")}`,
+      width * 0.5,
+      compact ? 12 : 15
+    );
+    ctx.textAlign = "right";
+    ctx.fillStyle = coop ? COLORS.cyan : COLORS.green;
+    ctx.fillText(
+      coop
+        ? compact
+          ? `COOP ${networkSnapshot.playerCount}/2`
+          : `COOP ${networkSnapshot.playerCount}/2 // ${networkSnapshot.roomCode}`
+        : compact
+          ? "SYS OK"
+          : "SYSTEMES NOMINAUX",
+      width - sideWidth - (compact ? 5 : 12),
+      compact ? 12 : 15
+    );
+
+    const gaugeHeight = compact ? 22 : 28;
+    const gaugeGap = compact ? 3 : 5;
+    const leftX = sideWidth + (compact ? 5 : 14);
+    const leftWidth = compact
+      ? Math.min(104, width * 0.27)
+      : Math.min(190, width * 0.2);
+    const gaugeTop = consoleTop + (compact ? 22 : 27);
+    const speedProgress = Math.min(1, Math.abs(player.speed) / tank.forwardSpeed);
+    drawLinearCockpitGauge(
+      leftX,
+      gaugeTop,
+      leftWidth,
+      gaugeHeight,
+      "VITESSE",
+      `${Math.round(player.speed * 10)}`,
+      speedProgress,
+      COLORS.green,
+      compact
+    );
+    drawLinearCockpitGauge(
+      leftX,
+      gaugeTop + gaugeHeight + gaugeGap,
+      leftWidth,
+      gaugeHeight,
+      "BLINDAGE",
+      `${Math.ceil(player.health)}%`,
+      player.health / 100,
+      player.health < 30 ? COLORS.red : COLORS.green,
+      compact
+    );
+    if (coop) {
+      drawLinearCockpitGauge(
+        leftX,
+        gaugeTop + (gaugeHeight + gaugeGap) * 2,
+        leftWidth,
+        gaugeHeight,
+        "COEQUIPIER",
+        `${Math.ceil(allyHealth)}%`,
+        allyHealth / 100,
+        COLORS.cyan,
+        compact
       );
     }
 
-    const armorWidth = Math.min(180, width * 0.34);
-    const armorX = margin;
-    const armorY = height - 32;
-    ctx.fillStyle = COLORS.green;
-    ctx.fillText("BLINDAGE", armorX, armorY - 9);
-    ctx.strokeStyle = player.health < 30 ? COLORS.red : COLORS.green;
-    ctx.strokeRect(armorX, armorY, armorWidth, 8);
-    ctx.fillStyle = player.health < 30 ? COLORS.red : COLORS.green;
-    ctx.fillRect(armorX + 2, armorY + 2, (armorWidth - 4) * (player.health / 100), 4);
-    ctx.textAlign = "right";
-    ctx.fillText(`${Math.ceil(player.health)}%`, armorX + armorWidth, armorY - 9);
+    if (!compact) {
+      const reloadWidth = Math.min(158, width * 0.145);
+      const reloadX = radarX - radarRadius - 18 - reloadWidth;
+      const ready = player.reload <= 0;
+      const reloadProgress = ready
+        ? 1
+        : Math.max(0, 1 - player.reload / tank.reloadTime);
+      drawLinearCockpitGauge(
+        reloadX,
+        consoleTop + 36,
+        reloadWidth,
+        31,
+        ready ? "CANON PRET" : "RECHARGE",
+        ready ? "FEU" : `${Math.round(reloadProgress * 100)}%`,
+        reloadProgress,
+        ready ? COLORS.amber : COLORS.green,
+        false
+      );
+    }
 
-    const reloadWidth = Math.min(160, width * 0.3);
-    const reloadX = width - margin - reloadWidth;
-    const reloadY = height - 32;
-    const ready = player.reload <= 0;
-    ctx.fillStyle = ready ? COLORS.amber : COLORS.green;
-    ctx.textAlign = "left";
-    ctx.fillText(ready ? "CANON PRÊT" : "RECHARGE", reloadX, reloadY - 9);
-    ctx.strokeStyle = ready ? COLORS.amber : COLORS.green;
-    ctx.strokeRect(reloadX, reloadY, reloadWidth, 8);
-    ctx.fillStyle = ready ? COLORS.amber : COLORS.green;
-    const reloadProgress = ready ? 1 : 1 - player.reload / tank.reloadTime;
-    ctx.fillRect(reloadX + 2, reloadY + 2, (reloadWidth - 4) * Math.max(0, reloadProgress), 4);
+    drawTurretCockpitGauge(layout, tank);
     ctx.restore();
   }
 

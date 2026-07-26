@@ -1622,6 +1622,47 @@
     return Math.pow(fadeProgress, 1.45);
   }
 
+  function getEnemyLinePulse(enemy, type) {
+    let period = 1300;
+    let minimum = 0.65;
+    let maximum = 1.12;
+    if (type.priority) {
+      period = 1050;
+      minimum = 0.58;
+      maximum = 1.18;
+    }
+    if (type.id === "ghost" && (enemy.revealTimer ?? 0) > 0) {
+      period = 760;
+      minimum = 0.5;
+      maximum = 1.2;
+    }
+    if (type.kamikaze && enemy.kamikazeArmed) {
+      period = 300;
+      minimum = 0.35;
+      maximum = 1.28;
+    }
+
+    const phase = (Number(enemy.id) || 0) * 1.73;
+    const wave =
+      0.5 +
+      Math.sin(performance.now() * TAU / period + phase) * 0.5;
+    return minimum + (maximum - minimum) * wave;
+  }
+
+  function modulateLineColor(color, intensity) {
+    if (!/^#[0-9a-f]{6}$/i.test(color)) return color;
+    const value = Number.parseInt(color.slice(1), 16);
+    const brighten = (channel) =>
+      intensity <= 1
+        ? channel * intensity
+        : channel +
+          (255 - channel) * Math.min(1, (intensity - 1) * 1.5);
+    const red = Math.round(brighten((value >> 16) & 255));
+    const green = Math.round(brighten((value >> 8) & 255));
+    const blue = Math.round(brighten(value & 255));
+    return `rgb(${red}, ${green}, ${blue})`;
+  }
+
   function drawEnemy(enemy) {
     const type = getEnemyType(enemy);
     const centerProjection = project({
@@ -1649,16 +1690,20 @@
       enemy.hitFlash > 0 || (enemy.revealFlash ?? 0) > 0
         ? COLORS.white
         : baseColor;
+    const modelColor =
+      color === COLORS.white
+        ? color
+        : modulateLineColor(color, getEnemyLinePulse(enemy, type));
 
     if (type.id === "guardian") {
       drawGuardianAura(enemy, fade);
-      drawGuardianEnemy(enemy, type, color, fade);
+      drawGuardianEnemy(enemy, type, modelColor, fade);
     } else if (type.kamikaze) {
-      drawKamikazeEnemy(enemy, type, color, fade);
+      drawKamikazeEnemy(enemy, type, modelColor, fade);
     } else if (type.id === "artillery") {
-      drawArtilleryEnemy(enemy, color, fade);
+      drawArtilleryEnemy(enemy, modelColor, fade);
     } else {
-      drawMobileEnemy(enemy, type, color, fade);
+      drawMobileEnemy(enemy, type, modelColor, fade);
     }
     drawEnemyShield(enemy, fade);
 

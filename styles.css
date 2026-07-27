@@ -50,7 +50,8 @@ canvas {
 }
 
 .start-screen,
-.message-panel {
+.message-panel,
+.upgrade-panel {
   position: absolute;
   z-index: 4;
   left: 50%;
@@ -70,7 +71,8 @@ canvas {
 }
 
 .start-screen::before,
-.message-panel::before {
+.message-panel::before,
+.upgrade-panel::before {
   content: "";
   position: absolute;
   inset: 9px;
@@ -478,6 +480,95 @@ button small {
   line-height: 1.7;
 }
 
+.upgrade-panel {
+  z-index: 5;
+  max-width: 690px;
+}
+
+.upgrade-panel h2 {
+  margin: 0 0 12px;
+  color: var(--green);
+  font: 900 clamp(30px, 7vw, 48px)/0.95 Impact, sans-serif;
+  letter-spacing: 0.025em;
+  text-shadow: 0 0 12px rgba(120, 255, 154, 0.25);
+}
+
+.upgrade-copy,
+.upgrade-status,
+.upgrade-hint {
+  position: relative;
+  margin: 0;
+  color: rgba(220, 255, 228, 0.72);
+  font-size: 10px;
+  line-height: 1.55;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.upgrade-options {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin: 21px 0 15px;
+}
+
+.upgrade-button {
+  display: flex;
+  min-width: 0;
+  min-height: 122px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 7px;
+  padding: 13px 10px;
+  border-color: rgba(120, 255, 154, 0.4);
+  background: rgba(5, 27, 13, 0.76);
+  color: var(--green);
+  box-shadow: inset 0 0 22px rgba(46, 169, 92, 0.05);
+}
+
+.upgrade-button strong {
+  color: var(--amber);
+  font-size: 13px;
+  letter-spacing: 0.1em;
+}
+
+.upgrade-button span {
+  font-size: 9px;
+  letter-spacing: 0.055em;
+}
+
+.upgrade-button small {
+  margin: 3px 0 0;
+  color: rgba(220, 255, 228, 0.54);
+  font-size: 8px;
+}
+
+.upgrade-button.selected {
+  border-color: var(--amber);
+  background: rgba(255, 211, 106, 0.12);
+  box-shadow: inset 0 0 20px rgba(255, 211, 106, 0.12), 0 0 18px rgba(255, 211, 106, 0.12);
+}
+
+.upgrade-button.selected strong,
+.upgrade-button.selected span {
+  color: var(--amber);
+}
+
+.upgrade-status {
+  min-height: 16px;
+  color: var(--cyan, #68d8ff);
+}
+
+.upgrade-hint {
+  margin-top: 12px;
+  color: rgba(120, 255, 154, 0.44);
+  font-size: 8px;
+}
+
+.upgrade-hint kbd {
+  margin: 0 1px;
+}
+
 .pause-label {
   position: absolute;
   z-index: 3;
@@ -541,6 +632,14 @@ button small {
 
   .tank-selection {
     grid-template-columns: 1fr;
+  }
+
+  .upgrade-options {
+    grid-template-columns: 1fr;
+  }
+
+  .upgrade-button {
+    min-height: 72px;
   }
 
   .controls {

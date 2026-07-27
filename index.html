@@ -131,6 +131,31 @@
       </button>
     </section>
 
+    <section class="upgrade-panel hidden" id="upgrade-panel" aria-live="polite" aria-labelledby="upgrade-title">
+      <p class="message-kicker" id="upgrade-kicker">SECTEUR SÉCURISÉ</p>
+      <h2 id="upgrade-title">RÉGLAGE TACTIQUE</h2>
+      <p class="upgrade-copy" id="upgrade-copy">Allouez votre point avant la prochaine vague.</p>
+      <div class="upgrade-options" role="group" aria-label="Amélioration du tank">
+        <button class="upgrade-button" type="button" data-upgrade="speed">
+          <strong>PROPULSION</strong>
+          <span>VITESSE +7 %</span>
+          <small>NIVEAU 0 → 1</small>
+        </button>
+        <button class="upgrade-button" type="button" data-upgrade="armor">
+          <strong>BLINDAGE</strong>
+          <span>DÉGÂTS REÇUS -8 %</span>
+          <small>NIVEAU 0 → 1</small>
+        </button>
+        <button class="upgrade-button" type="button" data-upgrade="range">
+          <strong>TRAJECTOIRE</strong>
+          <span>PORTÉE +15 %</span>
+          <small>NIVEAU 0 → 1</small>
+        </button>
+      </div>
+      <p class="upgrade-status" id="upgrade-status"></p>
+      <p class="upgrade-hint">RACCOURCIS : <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></p>
+    </section>
+
     <div class="pause-label hidden" id="pause-label">PAUSE</div>
     <div class="crt-overlay" aria-hidden="true"></div>
   </main>

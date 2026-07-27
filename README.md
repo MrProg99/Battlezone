@@ -83,6 +83,7 @@ puis interpolent le monde partagé reçu depuis `battlezone/rooms/<code>/world`.
 - Souris : orienter la tourelle
 - `C` : recentrer progressivement la tourelle
 - Clic gauche ou espace : tirer
+- Clic droit : impulsion de choc défensive
 - `P` : pause
 - `R` : recommencer après une défaite
 

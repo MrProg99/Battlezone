@@ -442,6 +442,16 @@
       shotZ: Number(state.shotZ.toFixed(3)),
       shotYaw: Number(state.shotYaw.toFixed(4)),
       shotTankId: state.shotTankId === "bastion" ? "bastion" : "scout",
+      pulseSequence: state.pulseSequence,
+      pulseX: Number(state.pulseX.toFixed(3)),
+      pulseZ: Number(state.pulseZ.toFixed(3)),
+      upgradeRound: Math.max(0, Math.floor(Number(state.upgradeRound) || 0)),
+      upgradeChoice: ["speed", "armor", "range"].includes(state.upgradeChoice)
+        ? state.upgradeChoice
+        : "",
+      upgradeSpeed: Math.max(0, Math.floor(Number(state.upgradeSpeed) || 0)),
+      upgradeArmor: Math.max(0, Math.floor(Number(state.upgradeArmor) || 0)),
+      upgradeRange: Math.max(0, Math.floor(Number(state.upgradeRange) || 0)),
       updatedAt: Date.now()
     };
 

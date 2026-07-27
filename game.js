@@ -11,6 +11,11 @@
   const messageCopy = document.querySelector("#message-copy");
   const restartButton = document.querySelector("#restart-button");
   const pauseLabel = document.querySelector("#pause-label");
+  const upgradePanel = document.querySelector("#upgrade-panel");
+  const upgradeKicker = document.querySelector("#upgrade-kicker");
+  const upgradeCopy = document.querySelector("#upgrade-copy");
+  const upgradeStatus = document.querySelector("#upgrade-status");
+  const upgradeButtons = [...document.querySelectorAll(".upgrade-button")];
   const tankCards = [...document.querySelectorAll(".tank-card")];
   const modeButtons = [...document.querySelectorAll(".mode-button")];
   const onlinePanel = document.querySelector("#online-panel");
@@ -26,11 +31,21 @@
   const startButtonHelp = document.querySelector("#start-button-help");
   const network = window.BattlezoneNetwork;
   const cannonFireSound = new Audio("Son/CanonFire.mp3");
-  const tankExplosionSound = new Audio("Son/TankExplosion.mp3");
+  const empShockSound = new Audio("Son/EmpShock.mp3");
+  const tankExplosionSounds = [
+    new Audio("Son/TankExplosion.mp3"),
+    new Audio("Son/TankExplosion2.mp3"),
+    new Audio("Son/TankExplosion3.mp3")
+  ];
   const metalImpactSound = new Audio("Son/MetalImpact.mp3");
+  const motorSound = new Audio("Son/MotorSound.mp3");
   cannonFireSound.preload = "auto";
-  tankExplosionSound.preload = "auto";
+  empShockSound.preload = "auto";
+  for (const sound of tankExplosionSounds) sound.preload = "auto";
   metalImpactSound.preload = "auto";
+  motorSound.preload = "auto";
+  motorSound.loop = true;
+  motorSound.volume = 0;
 
   const TAU = Math.PI * 2;
   const NEAR = 0.22;
@@ -63,6 +78,14 @@
     RETREAT_MARGIN: 5,
     CHASSIS_TURN_RATE: 1.05
   });
+  const ENEMY_DODGE = Object.freeze({
+    LOOK_AHEAD: 0.82,
+    MIN_TIME_TO_IMPACT: 0.07,
+    COOLDOWN: 1.35,
+    LIGHT_CHANCE: 0.88,
+    ASSAULT_CHANCE: 0.46,
+    TURN_MULTIPLIER: 4.6
+  });
   const GUARDIAN_SHIELD_RADIUS = 16;
   const GUARDIAN_SHIELD_RECHARGE = 3.2;
   const KAMIKAZE_TRIGGER_RADIUS = 3.2;
@@ -79,6 +102,18 @@
   const DRONE_VERTICAL_SPEED = 3.35;
   const DRONE_ATTACK_ALTITUDE = 0.95;
   const DRONE_STRAFE_TIME = 1.15;
+  const SHOCK_PULSE = Object.freeze({
+    RADIUS: 11,
+    SHELL_RADIUS: 12.5,
+    DAMAGE: 1,
+    RELOAD_TIME: 7
+  });
+  const TANK_UPGRADES = Object.freeze({
+    speed: Object.freeze({ label: "PROPULSION", speedMultiplier: 0.07 }),
+    armor: Object.freeze({ label: "BLINDAGE", damageReduction: 0.08 }),
+    range: Object.freeze({ label: "TRAJECTOIRE", rangeMultiplier: 0.15 })
+  });
+  const UPGRADE_IDS = Object.freeze(["speed", "armor", "range"]);
   const MOON_WORLD_AZIMUTH = 0.48;
   const ENEMY_TYPES = Object.freeze({
     assault: Object.freeze({
@@ -387,6 +422,8 @@
   let enemySerial = 0;
   let shellSerial = 0;
   let audioContext = null;
+  let motorSoundStarted = false;
+  let motorSoundStarting = false;
   let selectedTankId = "scout";
   let playMode = "solo";
   let networkSnapshot = network?.getState() ?? {
@@ -398,14 +435,31 @@
   };
   let localStateSequence = 0;
   let localShotSequence = 0;
+  let localPulseSequence = 0;
   let sharedWorldSequence = 0;
   let appliedWorldSequence = -1;
+  let sharedPulseSequence = 0;
+  let appliedPulseSequence = 0;
   let sharedGameOver = false;
   let lastLocalShot = {
     x: 0,
     z: 4,
     yaw: 0,
     tankId: "scout"
+  };
+  let lastLocalPulse = { x: 0, z: 4 };
+  let latestSharedPulse = null;
+  let recentLocalPulseVisual = null;
+  let localUpgradeChoice = "";
+  const upgradeState = {
+    active: false,
+    round: 0,
+    choices: { host: "", guest: "", guest2: "" },
+    stats: {
+      host: { speed: 0, armor: 0, range: 0 },
+      guest: { speed: 0, armor: 0, range: 0 },
+      guest2: { speed: 0, armor: 0, range: 0 }
+    }
   };
 
   const keys = new Set();
@@ -438,14 +492,44 @@
     speed: 0,
     health: 100,
     reload: 0,
+    pulseCooldown: 0,
     score: 0,
     wave: 0,
     kills: 0,
     invulnerable: 0
   };
 
+  function createUpgradeLevels(source = {}) {
+    return {
+      speed: Math.max(0, Math.floor(Number(source.speed) || 0)),
+      armor: Math.max(0, Math.floor(Number(source.armor) || 0)),
+      range: Math.max(0, Math.floor(Number(source.range) || 0))
+    };
+  }
+
+  function getLocalRole() {
+    return isCoopGame() ? networkSnapshot.role : "host";
+  }
+
+  function getRoleUpgrades(role) {
+    return upgradeState.stats[role] ?? createUpgradeLevels();
+  }
+
+  function getTankStats(tankId, upgrades = createUpgradeLevels()) {
+    const tank = PLAYER_TANKS[tankId] ?? PLAYER_TANKS.scout;
+    const speedMultiplier = 1 + upgrades.speed * TANK_UPGRADES.speed.speedMultiplier;
+    const rangeMultiplier = 1 + upgrades.range * TANK_UPGRADES.range.rangeMultiplier;
+    return {
+      ...tank,
+      forwardSpeed: tank.forwardSpeed * speedMultiplier,
+      reverseSpeed: tank.reverseSpeed * speedMultiplier,
+      acceleration: tank.acceleration * (1 + upgrades.speed * 0.05),
+      shellLifetime: tank.shellLifetime * rangeMultiplier
+    };
+  }
+
   function getPlayerTank() {
-    return PLAYER_TANKS[player.tankId] ?? PLAYER_TANKS.scout;
+    return getTankStats(player.tankId, getRoleUpgrades(getLocalRole()));
   }
 
   function getEnemyType(enemy) {
@@ -598,7 +682,17 @@
         shotX: Number(state.shotX) || Number(state.x) || 0,
         shotZ: Number(state.shotZ) || Number(state.z) || 0,
         shotYaw: Number(state.shotYaw) || 0,
-        shotTankId: state.shotTankId === "bastion" ? "bastion" : "scout"
+        shotTankId: state.shotTankId === "bastion" ? "bastion" : "scout",
+        pulseSequence: Number(state.pulseSequence) || 0,
+        pulseX: Number(state.pulseX) || Number(state.x) || 0,
+        pulseZ: Number(state.pulseZ) || Number(state.z) || 0,
+        upgradeRound: Math.max(0, Math.floor(Number(state.upgradeRound) || 0)),
+        upgradeChoice: UPGRADE_IDS.includes(state.upgradeChoice)
+          ? state.upgradeChoice
+          : "",
+        upgradeSpeed: Math.max(0, Math.floor(Number(state.upgradeSpeed) || 0)),
+        upgradeArmor: Math.max(0, Math.floor(Number(state.upgradeArmor) || 0)),
+        upgradeRange: Math.max(0, Math.floor(Number(state.upgradeRange) || 0))
       };
       const remote = remotePlayers.get(uid);
       if (remote) {
@@ -612,12 +706,24 @@
           remote.lastShotSequence ?? 0,
           target.shotSequence
         );
+        if (
+          isWorldAuthority() &&
+          target.role !== "host" &&
+          target.pulseSequence > (remote.lastPulseSequence ?? 0)
+        ) {
+          activateShockPulse(target.pulseX, target.pulseZ);
+        }
+        remote.lastPulseSequence = Math.max(
+          remote.lastPulseSequence ?? 0,
+          target.pulseSequence
+        );
         remote.target = target;
       } else {
         remotePlayers.set(uid, {
           ...target,
           target,
-          lastShotSequence: target.shotSequence
+          lastShotSequence: target.shotSequence,
+          lastPulseSequence: target.pulseSequence
         });
       }
     }
@@ -657,6 +763,7 @@
   }
 
   async function createOrJoinRoom() {
+    initAudio();
     if (!network?.getState().configured) {
       updateLobbyUi();
       return;
@@ -710,7 +817,15 @@
       shotX: lastLocalShot.x,
       shotZ: lastLocalShot.z,
       shotYaw: lastLocalShot.yaw,
-      shotTankId: lastLocalShot.tankId
+      shotTankId: lastLocalShot.tankId,
+      pulseSequence: localPulseSequence,
+      pulseX: lastLocalPulse.x,
+      pulseZ: lastLocalPulse.z,
+      upgradeRound: upgradeState.active ? upgradeState.round : 0,
+      upgradeChoice: localUpgradeChoice,
+      upgradeSpeed: getRoleUpgrades(getLocalRole()).speed,
+      upgradeArmor: getRoleUpgrades(getLocalRole()).armor,
+      upgradeRange: getRoleUpgrades(getLocalRole()).range
     });
   }
 
@@ -719,6 +834,88 @@
     return Array.isArray(collection)
       ? collection.filter(Boolean)
       : Object.values(collection);
+  }
+
+  function isUpgradeActive() {
+    return upgradeState.active;
+  }
+
+  function getUpgradeRoles() {
+    if (!isCoopGame()) return ["host"];
+    return COOP_ROLES.filter(
+      (role) => networkSnapshot.players?.[role]?.connected !== false && networkSnapshot.players?.[role]
+    );
+  }
+
+  function normalizeUpgradeChoice(choice) {
+    return UPGRADE_IDS.includes(choice) ? choice : "";
+  }
+
+  function updateUpgradePanel() {
+    const visible = running && upgradeState.active && !gameOver;
+    upgradePanel.classList.toggle("hidden", !visible);
+    if (!visible) return;
+
+    const role = getLocalRole();
+    const stats = getRoleUpgrades(role);
+    const choice = localUpgradeChoice || upgradeState.choices[role];
+    const roles = getUpgradeRoles();
+    const readyCount = roles.filter(
+      (candidate) =>
+        candidate === role
+          ? Boolean(choice)
+          : Boolean(upgradeState.choices[candidate])
+    ).length;
+    upgradeKicker.textContent = `VAGUE ${String(upgradeState.round).padStart(2, "0")} // SECTEUR SÉCURISÉ`;
+    upgradeCopy.textContent = "ALLOUEZ VOTRE POINT AVANT LA PROCHAINE VAGUE.";
+
+    for (const button of upgradeButtons) {
+      const id = button.dataset.upgrade;
+      const level = stats[id] ?? 0;
+      const selected = choice === id;
+      button.classList.toggle("selected", selected);
+      button.disabled = Boolean(choice);
+      button.querySelector("small").textContent = selected
+        ? `NIVEAU ${level} ACQUIS`
+        : `NIVEAU ${level} → ${level + 1}`;
+    }
+
+    if (choice) {
+      const label = TANK_UPGRADES[choice].label;
+      upgradeStatus.textContent = isCoopGame()
+        ? `${label} CONFIRMÉ // ESCOUADE ${readyCount}/${roles.length}`
+        : `${label} CONFIRMÉ // DÉPLOIEMENT EN COURS`;
+    } else {
+      upgradeStatus.textContent = isCoopGame()
+        ? `EN ATTENTE DE VOTRE CHOIX // ESCOUADE ${readyCount}/${roles.length}`
+        : "SÉLECTIONNEZ UN MODULE";
+    }
+  }
+
+  function applySharedUpgradeState(incoming = {}) {
+    const wasActive = upgradeState.active;
+    const active = Boolean(incoming.active);
+    const incomingRound = Math.max(0, Math.floor(Number(incoming.round) || 0));
+    const localRole = getLocalRole();
+
+    upgradeState.active = active;
+    upgradeState.round = incomingRound;
+    for (const role of COOP_ROLES) {
+      const choice = normalizeUpgradeChoice(incoming.choices?.[role]);
+      upgradeState.choices[role] = choice;
+      const shouldKeepPendingLocalStats =
+        active &&
+        role === localRole &&
+        localUpgradeChoice &&
+        choice !== localUpgradeChoice;
+      if (!shouldKeepPendingLocalStats) {
+        upgradeState.stats[role] = createUpgradeLevels(incoming.stats?.[role]);
+      }
+    }
+
+    if (!active) localUpgradeChoice = "";
+    if (active && !wasActive) document.exitPointerLock?.();
+    updateUpgradePanel();
   }
 
   function applySharedWorld(world) {
@@ -739,6 +936,24 @@
       Math.min(100, coopHealth[networkSnapshot.role] ?? player.health)
     );
     sharedGameOver = Boolean(world.gameOver);
+    applySharedUpgradeState(world.upgrade);
+
+    const incomingPulse = world.pulse;
+    const incomingPulseSequence = Number(incomingPulse?.sequence) || 0;
+    if (incomingPulseSequence > appliedPulseSequence) {
+      appliedPulseSequence = incomingPulseSequence;
+      const isLocalEcho =
+        recentLocalPulseVisual &&
+        performance.now() < recentLocalPulseVisual.until &&
+        Math.hypot(
+          Number(incomingPulse.x) - recentLocalPulseVisual.x,
+          Number(incomingPulse.z) - recentLocalPulseVisual.z
+        ) < 1.2;
+      if (!isLocalEcho) {
+        createShockPulseVisual(Number(incomingPulse.x), Number(incomingPulse.z));
+      }
+      recentLocalPulseVisual = null;
+    }
 
     if (player.health < previousHealth) {
       flash = 1;
@@ -1008,6 +1223,17 @@
         host: Math.round(coopHealth.host),
         guest: Math.round(coopHealth.guest),
         guest2: Math.round(coopHealth.guest2)
+      },
+      pulse: latestSharedPulse,
+      upgrade: {
+        active: upgradeState.active,
+        round: upgradeState.round,
+        choices: { ...upgradeState.choices },
+        stats: {
+          host: createUpgradeLevels(upgradeState.stats.host),
+          guest: createUpgradeLevels(upgradeState.stats.guest),
+          guest2: createUpgradeLevels(upgradeState.stats.guest2)
+        }
       },
       gameOver: sharedGameOver,
       enemies: enemyStates,
@@ -2231,36 +2457,43 @@
   }
 
   function drawParticle(particle) {
+    if (particle.kind === "shockwave") {
+      const alpha = Math.max(0, particle.life / particle.maxLife);
+      const progress = 1 - alpha;
+      const radius = particle.maxRadius * (1 - Math.pow(1 - progress, 3));
+      const trailRadius = Math.max(0.18, radius - particle.maxRadius * 0.16);
+      const segments = 42;
+      const drawRing = (ringRadius, height, lineWidth, ringAlpha) => {
+        for (let i = 0; i < segments; i += 1) {
+          const angleA = i / segments * TAU;
+          const angleB = (i + 1) / segments * TAU;
+          line3d(
+            {
+              x: particle.x + Math.sin(angleA) * ringRadius,
+              y: height,
+              z: particle.z + Math.cos(angleA) * ringRadius
+            },
+            {
+              x: particle.x + Math.sin(angleB) * ringRadius,
+              y: height,
+              z: particle.z + Math.cos(angleB) * ringRadius
+            },
+            particle.color,
+            lineWidth,
+            ringAlpha
+          );
+        }
+      };
+
+      // Le front lumineux et sa traînée donnent une vraie onde de choc lisible.
+      drawRing(radius, 0.08, 2.8, alpha * 0.95);
+      if (progress > 0.1) drawRing(trailRadius, 0.12, 1.15, alpha * 0.62);
+      return;
+    }
+
     const p = project(particle);
     if (!p) return;
     const alpha = Math.max(0, particle.life / particle.maxLife);
-
-    if (particle.kind === "shockwave") {
-      const progress = 1 - alpha;
-      const radius =
-        particle.maxRadius * (1 - Math.pow(1 - progress, 2));
-      const segments = 28;
-      for (let i = 0; i < segments; i += 2) {
-        const angleA = i / segments * TAU;
-        const angleB = (i + 1) / segments * TAU;
-        line3d(
-          {
-            x: particle.x + Math.sin(angleA) * radius,
-            y: 0.04,
-            z: particle.z + Math.cos(angleA) * radius
-          },
-          {
-            x: particle.x + Math.sin(angleB) * radius,
-            y: 0.04,
-            z: particle.z + Math.cos(angleB) * radius
-          },
-          particle.color,
-          1.7,
-          alpha * 0.85
-        );
-      }
-      return;
-    }
 
     if (particle.kind === "smoke") {
       const fadeIn = Math.min(1, (1 - alpha) * 8);
@@ -3067,6 +3300,10 @@
     const allyHealthText = allyHealths.length > 1
       ? `${allyHealths.map((health) => Math.ceil(health)).join("/")}%`
       : `${Math.ceil(allyHealth)}%`;
+    const armorLevel = getRoleUpgrades(getLocalRole()).armor;
+    const armorReduction = Math.round(
+      (1 - Math.pow(1 - TANK_UPGRADES.armor.damageReduction, armorLevel)) * 100
+    );
 
     ctx.save();
     ctx.font = `${compact ? 7 : 9}px Courier New`;
@@ -3076,6 +3313,18 @@
       compact ? `${tank.label} ${range}m` : `${tank.label} // PORTEE ${range}m`,
       sideWidth + (compact ? 5 : 12),
       compact ? 12 : 15
+    );
+    const pulseProgress = Math.max(
+      0,
+      1 - player.pulseCooldown / SHOCK_PULSE.RELOAD_TIME
+    );
+    ctx.fillStyle = pulseProgress >= 1 ? COLORS.cyan : COLORS.dim;
+    ctx.fillText(
+      compact
+        ? `IMP ${pulseProgress >= 1 ? "OK" : `${Math.ceil(player.pulseCooldown)}s`}`
+        : `IMPULSION ${pulseProgress >= 1 ? "PRETE" : `${Math.ceil(player.pulseCooldown)}s`}`,
+      sideWidth + (compact ? 5 : 12),
+      compact ? 22 : 29
     );
     ctx.fillStyle = COLORS.green;
     ctx.textAlign = "center";
@@ -3124,8 +3373,12 @@
       gaugeTop + gaugeHeight + gaugeGap,
       leftWidth,
       gaugeHeight,
-      "BLINDAGE",
-      `${Math.ceil(player.health)}%`,
+      armorLevel > 0 ? `BLINDAGE +${armorLevel}` : "BLINDAGE",
+      armorLevel > 0
+        ? compact
+          ? `-${armorReduction}%`
+          : `${Math.ceil(player.health)}% // -${armorReduction}%`
+        : `${Math.ceil(player.health)}%`,
       player.health / 100,
       player.health < 30 ? COLORS.red : COLORS.green,
       compact
@@ -3160,6 +3413,17 @@
         ready ? "FEU" : `${Math.round(reloadProgress * 100)}%`,
         reloadProgress,
         ready ? COLORS.amber : COLORS.green,
+        false
+      );
+      drawLinearCockpitGauge(
+        reloadX,
+        consoleTop + 73,
+        reloadWidth,
+        28,
+        pulseProgress >= 1 ? "IMPULSION" : "RECHARGE IMP.",
+        pulseProgress >= 1 ? "PRETE" : `${Math.ceil(player.pulseCooldown)}s`,
+        pulseProgress,
+        COLORS.cyan,
         false
       );
     }
@@ -3469,7 +3733,10 @@
       flightState: type.airborne ? DRONE_FLIGHT_STATE.CRUISING : null,
       flightTimer: 0,
       attackCooldown: type.airborne ? 1.5 + Math.random() * 2.2 : 0,
-      attackFired: false
+      attackFired: false,
+      dodgeTimer: 0,
+      dodgeCooldown: Math.random() * 0.45,
+      dodgeHeading: initialHeading
     };
   }
 
@@ -3565,6 +3832,89 @@
     setTimeout(() => tone(360, 0.12, "square", 0.03), 110);
   }
 
+  function beginUpgradeRound() {
+    if (!isWorldAuthority() || upgradeState.active || player.wave <= 0) return;
+    upgradeState.active = true;
+    upgradeState.round = player.wave;
+    localUpgradeChoice = "";
+    player.speed = 0;
+    for (const role of COOP_ROLES) upgradeState.choices[role] = "";
+    keys.clear();
+    document.exitPointerLock?.();
+    updateUpgradePanel();
+    tone(420, 0.12, "square", 0.035, 90);
+    setTimeout(() => tone(610, 0.1, "square", 0.025, 120), 105);
+  }
+
+  function syncRemoteUpgradeChoices() {
+    if (!isCoopGame() || !isWorldAuthority() || !upgradeState.active) return;
+    for (const remote of remotePlayers.values()) {
+      const target = remote.target;
+      if (!target || target.upgradeRound !== upgradeState.round) continue;
+      const choice = normalizeUpgradeChoice(target.upgradeChoice);
+      if (!choice) continue;
+      upgradeState.choices[target.role] = choice;
+      upgradeState.stats[target.role] = createUpgradeLevels({
+        speed: target.upgradeSpeed,
+        armor: target.upgradeArmor,
+        range: target.upgradeRange
+      });
+    }
+  }
+
+  function finishUpgradeRound() {
+    if (!isWorldAuthority() || !upgradeState.active) return;
+    upgradeState.active = false;
+    localUpgradeChoice = "";
+    player.health = Math.min(100, player.health + 12);
+    if (isCoopGame()) {
+      coopHealth.host = player.health;
+      for (const role of COOP_ROLES) {
+        if (role !== "host") {
+          coopHealth[role] = Math.min(100, coopHealth[role] + 12);
+        }
+      }
+    }
+    updateUpgradePanel();
+    spawnWave();
+  }
+
+  function updateUpgradePhase() {
+    if (!upgradeState.active || !isWorldAuthority()) return;
+    syncRemoteUpgradeChoices();
+    const roles = getUpgradeRoles();
+    if (
+      roles.length > 0 &&
+      roles.every((role) => Boolean(upgradeState.choices[role]))
+    ) {
+      finishUpgradeRound();
+    }
+  }
+
+  function chooseTankUpgrade(choice) {
+    const id = normalizeUpgradeChoice(choice);
+    if (
+      !id ||
+      !running ||
+      paused ||
+      gameOver ||
+      !upgradeState.active ||
+      localUpgradeChoice
+    ) return;
+
+    const role = getLocalRole();
+    upgradeState.stats[role][id] += 1;
+    upgradeState.choices[role] = id;
+    localUpgradeChoice = id;
+    player.speed = 0;
+    updateUpgradePanel();
+    tone(680, 0.09, "square", 0.04, 120);
+    setTimeout(() => tone(920, 0.08, "square", 0.025, -70), 85);
+    canvas.requestPointerLock?.();
+    publishLocalPlayerState();
+    updateUpgradePhase();
+  }
+
   function seededRandom(seed) {
     let value = seed >>> 0;
     return () => {
@@ -3617,6 +3967,7 @@
       speed: 0,
       health: 100,
       reload: 0,
+      pulseCooldown: 0,
       score: 0,
       wave: 0,
       kills: 0,
@@ -3635,12 +3986,20 @@
     landingPulse = 0;
     localStateSequence = 0;
     localShotSequence = 0;
+    localPulseSequence = 0;
     sharedWorldSequence = 0;
     appliedWorldSequence = -1;
+    sharedPulseSequence = 0;
+    appliedPulseSequence = 0;
     sharedGameOver = false;
+    upgradeState.active = false;
+    upgradeState.round = 0;
+    localUpgradeChoice = "";
     for (const role of COOP_ROLES) {
       coopHealth[role] = 100;
       coopInvulnerability[role] = 0;
+      upgradeState.choices[role] = "";
+      upgradeState.stats[role] = createUpgradeLevels();
     }
     lastLocalShot = {
       x: coopSpawnX,
@@ -3648,6 +4007,9 @@
       yaw: 0,
       tankId: selectedTankId
     };
+    lastLocalPulse = { x: coopSpawnX, z: 4 };
+    latestSharedPulse = null;
+    recentLocalPulseVisual = null;
     cameraPitch = DROP_SEQUENCE.START_PITCH;
     update.nextWaveTimer = 0;
     createRocks(
@@ -3659,6 +4021,7 @@
     paused = false;
     pauseLabel.classList.add("hidden");
     messagePanel.classList.add("hidden");
+    updateUpgradePanel();
   }
 
   function startGame() {
@@ -3684,6 +4047,7 @@
       network.returnToLobby().catch(() => {});
     }
     resetGame();
+    muteMotorSound();
     running = false;
     missionPhase = MISSION_PHASE.IDLE;
     player.altitude = 0;
@@ -3701,6 +4065,7 @@
     if (gameOver) return;
     gameOver = true;
     running = false;
+    muteMotorSound();
     document.exitPointerLock?.();
     messageKicker.textContent = "SIGNAL DU CHAR PERDU";
     messageTitle.textContent = "MISSION TERMINÉE";
@@ -3720,7 +4085,10 @@
     if (!running || gameOver) return;
     paused = !paused;
     pauseLabel.classList.toggle("hidden", !paused);
-    if (paused) document.exitPointerLock?.();
+    if (paused) {
+      document.exitPointerLock?.();
+      muteMotorSound();
+    }
     lastTime = performance.now();
   }
 
@@ -3730,6 +4098,46 @@
       if (AudioCtor) audioContext = new AudioCtor();
     }
     if (audioContext?.state === "suspended") audioContext.resume();
+    startMotorSound();
+  }
+
+  function startMotorSound() {
+    if (motorSoundStarted || motorSoundStarting) return;
+    motorSoundStarting = true;
+    motorSound.play().then(
+      () => {
+        motorSoundStarted = true;
+        motorSoundStarting = false;
+      },
+      () => {
+        motorSoundStarting = false;
+      }
+    );
+  }
+
+  function muteMotorSound() {
+    motorSound.volume = 0;
+  }
+
+  function updateMotorSound(dt) {
+    const active =
+      running &&
+      !paused &&
+      !gameOver &&
+      missionPhase === MISSION_PHASE.COMBAT;
+    if (!active) {
+      muteMotorSound();
+      return;
+    }
+
+    const tank = getPlayerTank();
+    const speedRatio = Math.min(1, Math.abs(player.speed) / tank.forwardSpeed);
+    const baseRate = tank.id === "bastion" ? 0.72 : 0.82;
+    const targetRate = baseRate + speedRatio * 0.47;
+    const targetVolume = 0.035 + speedRatio * 0.19;
+    const smoothing = 1 - Math.exp(-dt * 7);
+    motorSound.volume += (targetVolume - motorSound.volume) * smoothing;
+    motorSound.playbackRate += (targetRate - motorSound.playbackRate) * smoothing;
   }
 
   function playCannonFireSound() {
@@ -3740,12 +4148,28 @@
     });
   }
 
+  function playShockPulseSound(x, z) {
+    const pulseDistance = Math.hypot(x - player.x, z - player.z);
+    const hearingRange = 52;
+    if (pulseDistance >= hearingRange) return;
+    const proximity = 1 - pulseDistance / hearingRange;
+    const sound = empShockSound.cloneNode();
+    sound.volume = Math.min(1, 0.12 + proximity ** 1.35 * 0.78);
+    sound.playbackRate = 0.98 + Math.random() * 0.04;
+    sound.play().catch(() => {
+      // Le navigateur peut bloquer le tout premier son hors geste utilisateur.
+    });
+  }
+
   function playTankExplosionSound(x, z, intensity = 1) {
     const explosionDistance = Math.hypot(x - player.x, z - player.z);
     const hearingRange = 70;
     if (explosionDistance >= hearingRange) return;
     const proximity = 1 - explosionDistance / hearingRange;
-    const sound = tankExplosionSound.cloneNode();
+    const source = tankExplosionSounds[
+      Math.floor(Math.random() * tankExplosionSounds.length)
+    ];
+    const sound = source.cloneNode();
     sound.volume = Math.min(1, (0.06 + proximity ** 1.45 * 0.88) * intensity);
     sound.playbackRate = 0.96 + Math.random() * 0.08;
     sound.play().catch(() => {
@@ -3941,6 +4365,7 @@
       paused ||
       gameOver ||
       missionPhase !== MISSION_PHASE.COMBAT ||
+      isUpgradeActive() ||
       player.reload > 0
     ) return;
     const tank = getPlayerTank();
@@ -3971,9 +4396,98 @@
     tone(190, 0.05, "square", 0.035, -80);
   }
 
+  function createShockPulseVisual(x, z) {
+    playShockPulseSound(x, z);
+    particles.push({
+      kind: "shockwave",
+      x,
+      y: 0.05,
+      z,
+      vx: 0,
+      vy: 0,
+      vz: 0,
+      gravity: 0,
+      drag: 0,
+      growth: 0,
+      size: 0,
+      color: COLORS.cyan,
+      maxRadius: SHOCK_PULSE.RADIUS,
+      life: 0.72,
+      maxLife: 0.72
+    });
+    burst(x, z, COLORS.cyan, 24, 0.45);
+    const localDistance = Math.hypot(x - player.x, z - player.z);
+    screenShake = Math.max(screenShake, Math.max(0, 8 - localDistance * 0.45));
+    tone(182, 0.22, "sawtooth", 0.06, 310);
+    tone(74, 0.34, "square", 0.045, -24);
+  }
+
+  function activateShockPulse(x, z) {
+    createShockPulseVisual(x, z);
+    if (isCoopGame()) {
+      latestSharedPulse = {
+        sequence: ++sharedPulseSequence,
+        x: Number(x.toFixed(3)),
+        z: Number(z.toFixed(3))
+      };
+    }
+
+    for (let i = shells.length - 1; i >= 0; i -= 1) {
+      const shell = shells[i];
+      if (shell.owner !== "enemy") continue;
+      if (Math.hypot(shell.x - x, shell.z - z) > SHOCK_PULSE.SHELL_RADIUS) continue;
+      shells.splice(i, 1);
+      burst(shell.x, shell.z, COLORS.cyan, 9, shell.y ?? 0.8);
+    }
+
+    for (const enemy of [...enemies]) {
+      if (Math.hypot(enemy.x - x, enemy.z - z) > SHOCK_PULSE.RADIUS) continue;
+      if (absorbEnemyShield(enemy, x, z)) continue;
+      enemy.health -= SHOCK_PULSE.DAMAGE;
+      enemy.hitFlash = 0.2;
+      burst(enemy.x, enemy.z, COLORS.cyan, 12, 0.45 + (enemy.elevation ?? 0));
+      if (enemy.health <= 0) {
+        destroyEnemy(enemy, true);
+      } else {
+        player.score += 20;
+      }
+    }
+  }
+
+  function fireShockPulse() {
+    if (
+      !running ||
+      paused ||
+      gameOver ||
+      missionPhase !== MISSION_PHASE.COMBAT ||
+      isUpgradeActive() ||
+      player.pulseCooldown > 0
+    ) return;
+
+    initAudio();
+    player.pulseCooldown = SHOCK_PULSE.RELOAD_TIME;
+    localPulseSequence += 1;
+    lastLocalPulse = { x: player.x, z: player.z };
+
+    if (isWorldAuthority()) {
+      activateShockPulse(player.x, player.z);
+      return;
+    }
+
+    createShockPulseVisual(player.x, player.z);
+    recentLocalPulseVisual = {
+      x: player.x,
+      z: player.z,
+      until: performance.now() + 520
+    };
+  }
+
   function spawnRemotePlayerShot(shot) {
     if (!running || missionPhase !== MISSION_PHASE.COMBAT) return;
-    const tank = PLAYER_TANKS[shot.shotTankId] ?? PLAYER_TANKS.scout;
+    const tank = getTankStats(
+      shot.shotTankId,
+      getRoleUpgrades(shot.role)
+    );
     shells.push({
       id: ++shellSerial,
       kind: "direct",
@@ -4267,6 +4781,7 @@
     }
 
     player.reload = Math.max(0, player.reload - dt);
+    player.pulseCooldown = Math.max(0, player.pulseCooldown - dt);
     player.invulnerable = Math.max(0, player.invulnerable - dt);
     alignmentPulse = Math.max(0, alignmentPulse - dt);
   }
@@ -4359,6 +4874,85 @@
     }
   }
 
+  function getEnemyDodgeChance(type) {
+    if (type.id === "light") return ENEMY_DODGE.LIGHT_CHANCE;
+    if (type.id === "assault") return ENEMY_DODGE.ASSAULT_CHANCE;
+    return 0;
+  }
+
+  function findIncomingShellThreat(enemy, type) {
+    const threatRadius = 1.45 * type.hitRadius + 0.65 * type.scale;
+    let closestThreat = null;
+
+    for (const shell of shells) {
+      if (
+        (shell.owner !== "player" && shell.owner !== "ally") ||
+        shell.kind === "artillery"
+      ) continue;
+      const velocitySquared = shell.vx ** 2 + shell.vz ** 2;
+      if (velocitySquared < 0.01) continue;
+
+      const offsetX = enemy.x - shell.x;
+      const offsetZ = enemy.z - shell.z;
+      const timeToClosest =
+        (offsetX * shell.vx + offsetZ * shell.vz) / velocitySquared;
+      if (
+        timeToClosest < ENEMY_DODGE.MIN_TIME_TO_IMPACT ||
+        timeToClosest > ENEMY_DODGE.LOOK_AHEAD ||
+        timeToClosest > shell.life
+      ) continue;
+
+      const closestX = shell.x + shell.vx * timeToClosest;
+      const closestZ = shell.z + shell.vz * timeToClosest;
+      const missDistance = Math.hypot(enemy.x - closestX, enemy.z - closestZ);
+      if (missDistance > threatRadius) continue;
+      if (!closestThreat || timeToClosest < closestThreat.timeToClosest) {
+        closestThreat = {
+          shell,
+          closestX,
+          closestZ,
+          missDistance,
+          timeToClosest
+        };
+      }
+    }
+
+    return closestThreat;
+  }
+
+  function updateEnemyDodge(enemy, type, dt) {
+    enemy.dodgeTimer = Math.max(0, (enemy.dodgeTimer ?? 0) - dt);
+    enemy.dodgeCooldown = Math.max(0, (enemy.dodgeCooldown ?? 0) - dt);
+    if (enemy.dodgeTimer > 0 || enemy.dodgeCooldown > 0) return;
+
+    const dodgeChance = getEnemyDodgeChance(type);
+    if (dodgeChance <= 0) return;
+    const threat = findIncomingShellThreat(enemy, type);
+    if (!threat) return;
+    if (Math.random() > dodgeChance) {
+      enemy.dodgeCooldown = 0.58 + Math.random() * 0.3;
+      return;
+    }
+
+    const shellSpeed = Math.hypot(threat.shell.vx, threat.shell.vz);
+    const perpendicularX = -threat.shell.vz / shellSpeed;
+    const perpendicularZ = threat.shell.vx / shellSpeed;
+    const pathOffsetX = enemy.x - threat.closestX;
+    const pathOffsetZ = enemy.z - threat.closestZ;
+    const sideScore = pathOffsetX * perpendicularX + pathOffsetZ * perpendicularZ;
+    const side = Math.abs(sideScore) > 0.04
+      ? Math.sign(sideScore)
+      : enemy.id % 2 === 0 ? 1 : -1;
+
+    enemy.dodgeHeading = Math.atan2(
+      perpendicularX * side,
+      perpendicularZ * side
+    );
+    enemy.dodgeTimer = type.id === "light" ? 0.42 : 0.3;
+    enemy.dodgeCooldown = ENEMY_DODGE.COOLDOWN + Math.random() * 0.45;
+    enemy.stateTimer = Math.min(enemy.stateTimer, 0.18);
+  }
+
   function updateEnemyMovement(
     enemy,
     targetHeading,
@@ -4368,8 +4962,11 @@
   ) {
     const type = getEnemyType(enemy);
     if (type.static) return;
+    const dodging = (enemy.dodgeTimer ?? 0) > 0;
 
-    if (type.kamikaze) {
+    if (dodging) {
+      // Le timer est géré par updateEnemyDodge afin de ne pas le réduire deux fois.
+    } else if (type.kamikaze) {
       enemy.state = ENEMY_STATE.APPROACH;
     } else {
       enemy.stateTimer -= dt;
@@ -4403,11 +5000,18 @@
       }
     }
 
-    const plan = getEnemyMovementPlan(enemy, targetHeading);
+    const plan = dodging
+      ? {
+          heading: enemy.dodgeHeading,
+          speedScale: type.id === "light" ? 1.48 : 1.22
+        }
+      : getEnemyMovementPlan(enemy, targetHeading);
     enemy.heading = turnTowardAngle(
       enemy.heading,
       plan.heading,
-      (type.chassisTurnRate ?? ENEMY_AI.CHASSIS_TURN_RATE) * dt
+      (type.chassisTurnRate ?? ENEMY_AI.CHASSIS_TURN_RATE) *
+        dt *
+        (dodging ? ENEMY_DODGE.TURN_MULTIPLIER : 1)
     );
 
     const moveSpeed = enemy.speed * plan.speedScale;
@@ -4969,6 +5573,10 @@
       const type = getEnemyType(enemy);
       enemy.hitFlash = Math.max(0, enemy.hitFlash - dt);
 
+      if (!type.static && !type.kamikaze && !type.airborne) {
+        updateEnemyDodge(enemy, type, dt);
+      }
+
       if (type.id === "light") {
         updateLightFlankIntent(enemy, target, dt);
       }
@@ -5077,7 +5685,12 @@
 
   function damagePlayer(amount, impactX, impactZ, shake = 12) {
     if (player.invulnerable > 0 || gameOver) return;
-    player.health = Math.max(0, player.health - amount);
+    const armorLevel = getRoleUpgrades(getLocalRole()).armor;
+    const mitigatedDamage = Math.max(
+      1,
+      Math.round(amount * Math.pow(1 - TANK_UPGRADES.armor.damageReduction, armorLevel))
+    );
+    player.health = Math.max(0, player.health - mitigatedDamage);
     if (isCoopGame() && networkSnapshot.role === "host") {
       coopHealth[networkSnapshot.role] = player.health;
     }
@@ -5108,7 +5721,12 @@
       coopInvulnerability[role] > 0 ||
       sharedGameOver
     ) return;
-    coopHealth[role] = Math.max(0, coopHealth[role] - amount);
+    const armorLevel = getRoleUpgrades(role).armor;
+    const mitigatedDamage = Math.max(
+      1,
+      Math.round(amount * Math.pow(1 - TANK_UPGRADES.armor.damageReduction, armorLevel))
+    );
+    coopHealth[role] = Math.max(0, coopHealth[role] - mitigatedDamage);
     coopInvulnerability[role] = 0.55;
     if (coopHealth[role] > 0) playMetalImpactSound(impactX, impactZ);
     burst(impactX, impactZ, COLORS.red, 18);
@@ -5489,12 +6107,28 @@
       updateScreenEffects(dt);
       updateRemotePlayers(dt);
       updateReplicatedWorld(dt);
+      updateMotorSound(dt);
+      publishLocalPlayerState();
+      publishSharedWorld();
+      return;
+    }
+
+    if (isUpgradeActive()) {
+      player.speed = 0;
+      updateMotorSound(dt);
+      updateRemotePlayers(dt);
+      updateReplicatedWorld(dt);
+      updateParticles(dt);
+      updateTankDebris(dt);
+      updateScreenEffects(dt);
+      updateUpgradePhase();
       publishLocalPlayerState();
       publishSharedWorld();
       return;
     }
 
     updatePlayer(dt);
+    updateMotorSound(dt);
     updateRemotePlayers(dt);
     updateReplicatedWorld(dt);
     if (isWorldAuthority()) updateEnemies(dt);
@@ -5515,16 +6149,7 @@
       update.nextWaveTimer -= dt;
       if (update.nextWaveTimer <= 0) {
         update.nextWaveTimer = 0;
-        player.health = Math.min(100, player.health + 12);
-        if (isCoopGame() && networkSnapshot.role === "host") {
-          coopHealth.host = player.health;
-          for (const role of COOP_ROLES) {
-            if (role !== "host") {
-              coopHealth[role] = Math.min(100, coopHealth[role] + 12);
-            }
-          }
-        }
-        spawnWave();
+        beginUpgradeRound();
       }
     } else {
       update.nextWaveTimer = 0;
@@ -5547,8 +6172,12 @@
   for (const button of modeButtons) {
     button.addEventListener("click", () => selectPlayMode(button.dataset.mode));
   }
+  for (const button of upgradeButtons) {
+    button.addEventListener("click", () => chooseTankUpgrade(button.dataset.upgrade));
+  }
   selectPlayerTank(selectedTankId);
   startButton.addEventListener("click", async () => {
+    initAudio();
     if (playMode === "solo") {
       startGame();
       return;
@@ -5577,11 +6206,11 @@
   });
   restartButton.addEventListener("click", returnToHangar);
   canvas.addEventListener("click", () => {
-    if (!running || paused || gameOver) return;
+    if (!running || paused || gameOver || isUpgradeActive()) return;
     initAudio();
     if (!pointerLocked) canvas.requestPointerLock?.();
-    else firePlayer();
   });
+  canvas.addEventListener("contextmenu", (event) => event.preventDefault());
 
   document.addEventListener("pointerlockchange", () => {
     pointerLocked = document.pointerLockElement === canvas;
@@ -5592,6 +6221,7 @@
       !pointerLocked ||
       paused ||
       gameOver ||
+      isUpgradeActive() ||
       missionPhase !== MISSION_PHASE.COMBAT
     ) return;
     recenteringTurret = false;
@@ -5600,9 +6230,26 @@
 
   document.addEventListener("mousedown", (event) => {
     if (event.button === 0 && pointerLocked) firePlayer();
+    if (event.button === 2 && pointerLocked) {
+      event.preventDefault();
+      fireShockPulse();
+    }
   });
 
   document.addEventListener("keydown", (event) => {
+    if (isUpgradeActive()) {
+      const upgradeKeys = {
+        Digit1: "speed",
+        Digit2: "armor",
+        Digit3: "range"
+      };
+      const choice = upgradeKeys[event.code];
+      if (choice) {
+        event.preventDefault();
+        chooseTankUpgrade(choice);
+        return;
+      }
+    }
     keys.add(event.code);
     if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(event.code)) {
       event.preventDefault();
@@ -5613,6 +6260,7 @@
       running &&
       !paused &&
       !gameOver &&
+      !isUpgradeActive() &&
       missionPhase === MISSION_PHASE.COMBAT
     ) recenteringTurret = true;
     if (event.code === "KeyP" && !event.repeat) togglePause();
@@ -5622,7 +6270,7 @@
   document.addEventListener("keyup", (event) => keys.delete(event.code));
   window.addEventListener("blur", () => {
     keys.clear();
-    if (running && !gameOver && !paused) togglePause();
+    if (running && !gameOver && !paused && !isUpgradeActive()) togglePause();
   });
   window.addEventListener("resize", resize);
 

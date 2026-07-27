@@ -2,7 +2,9 @@
   "use strict";
 
   const FIREBASE_VERSION = "12.16.0";
-  const MAX_PLAYERS = 2;
+  const MIN_PLAYERS = 2;
+  const MAX_PLAYERS = 3;
+  const GUEST_ROLES = ["guest", "guest2"];
   const SEND_INTERVAL = 90;
   const WORLD_SEND_INTERVAL = 100;
   const ROOMS_PATH = "battlezone/rooms";
@@ -53,9 +55,17 @@
       meta: session.meta ? { ...session.meta } : null,
       players: { ...session.players },
       world: session.world ? { ...session.world } : null,
-      playerCount: Object.keys(session.players).length,
+      playerCount: activePlayerCount(),
+      minPlayers: MIN_PLAYERS,
+      maxPlayers: MAX_PLAYERS,
       connected: Boolean(session.roomCode && session.uid)
     };
+  }
+
+  function activePlayerCount() {
+    return Object.values(session.players).filter(
+      (player) => player?.connected !== false
+    ).length;
   }
 
   function emit() {
@@ -118,6 +128,7 @@
   }
 
   function makePlayer(role, tankId) {
+    const spawnX = role === "host" ? -2.8 : role === "guest" ? 2.8 : 0;
     return {
       uid: session.uid,
       role,
@@ -126,7 +137,7 @@
       joinedAt: Date.now(),
       state: {
         tankId,
-        x: role === "host" ? -2.2 : 2.2,
+        x: spawnX,
         z: 4,
         altitude: 0,
         heading: 0,
@@ -139,7 +150,17 @@
     };
   }
 
+  function discardPendingMissionState() {
+    pendingState = null;
+    pendingWorldState = null;
+    if (sendTimer) window.clearTimeout(sendTimer);
+    if (worldSendTimer) window.clearTimeout(worldSendTimer);
+    sendTimer = 0;
+    worldSendTimer = 0;
+  }
+
   async function clearRoomListeners() {
+    discardPendingMissionState();
     for (const unsubscribe of roomUnsubscribes) unsubscribe();
     roomUnsubscribes = [];
     if (presenceUnsubscribe) presenceUnsubscribe();
@@ -216,6 +237,7 @@
           const metaDisconnect = onDisconnect(ref(database, `${roomPath}/meta`));
           await metaDisconnect.update({
             status: "closed",
+            maxPlayers: MAX_PLAYERS,
             closedAt: serverTimestamp()
           });
           if (playerRef !== activePlayerRef) {
@@ -284,7 +306,7 @@
     }
 
     await loadFirebase();
-    const { ref, get, set } = firebase.databaseModule;
+    const { ref, get, remove, runTransaction } = firebase.databaseModule;
     setPhase("joining");
     const roomRef = ref(database, `${ROOMS_PATH}/${roomCode}`);
     const snapshot = await get(roomRef);
@@ -297,16 +319,40 @@
     if (room.meta.version !== 2) {
       throw new Error("Ce salon utilise une autre version de Battlezone.");
     }
-    const existingGuest = room.players?.guest;
-    if (existingGuest?.uid && existingGuest.uid !== session.uid) {
-      throw new Error("Ce salon est déjà complet.");
+    const existingRole = GUEST_ROLES.find(
+      (role) => room.players?.[role]?.uid === session.uid
+    );
+    const candidates = existingRole
+      ? [existingRole, ...GUEST_ROLES.filter((role) => role !== existingRole)]
+      : GUEST_ROLES;
+    let joinedRole = "";
+    for (const role of candidates) {
+      const nextPlayer = makePlayer(role, tankId);
+      const slotRef = ref(database, `${ROOMS_PATH}/${roomCode}/players/${role}`);
+      const result = await runTransaction(
+        slotRef,
+        (current) =>
+          current == null || current.uid === session.uid
+            ? nextPlayer
+            : undefined,
+        { applyLocally: false }
+      );
+      if (result.committed) {
+        joinedRole = role;
+        break;
+      }
+    }
+    if (!joinedRole) throw new Error("Ce salon est déjà complet.");
+
+    const latestMeta = (
+      await get(ref(database, `${ROOMS_PATH}/${roomCode}/meta`))
+    ).val();
+    if (latestMeta?.status !== "lobby") {
+      await remove(ref(database, `${ROOMS_PATH}/${roomCode}/players/${joinedRole}`));
+      throw new Error("La mission de ce salon a déjà commencé.");
     }
 
-    await set(
-      ref(database, `${ROOMS_PATH}/${roomCode}/players/guest`),
-      makePlayer("guest", tankId)
-    );
-    await enterRoom(roomCode, "guest");
+    await enterRoom(roomCode, joinedRole);
     return publicState();
   }
 
@@ -314,13 +360,36 @@
     if (session.role !== "host" || !session.roomCode) {
       throw new Error("Seul l'hôte peut lancer la mission.");
     }
-    if (Object.keys(session.players).length < MAX_PLAYERS) {
+    if (activePlayerCount() < MIN_PLAYERS) {
       throw new Error("En attente du deuxième joueur.");
     }
+    if (session.meta?.status !== "lobby") {
+      throw new Error("La mission ne peut pas encore être relancée.");
+    }
     const { ref, update, serverTimestamp } = firebase.databaseModule;
-    await update(ref(database, `${ROOMS_PATH}/${session.roomCode}/meta`), {
-      status: "playing",
-      startedAt: serverTimestamp()
+    discardPendingMissionState();
+    await update(ref(database, `${ROOMS_PATH}/${session.roomCode}`), {
+      "meta/status": "playing",
+      "meta/maxPlayers": MAX_PLAYERS,
+      "meta/worldSeed": makeWorldSeed(),
+      "meta/startedAt": serverTimestamp(),
+      world: null
+    });
+  }
+
+  async function returnToLobby() {
+    discardPendingMissionState();
+    if (
+      session.role !== "host" ||
+      !session.roomCode ||
+      session.meta?.status === "lobby"
+    ) return;
+    const { ref, update, serverTimestamp } = firebase.databaseModule;
+    await update(ref(database, `${ROOMS_PATH}/${session.roomCode}`), {
+      "meta/status": "lobby",
+      "meta/maxPlayers": MAX_PLAYERS,
+      "meta/endedAt": serverTimestamp(),
+      world: null
     });
   }
 
@@ -335,7 +404,15 @@
 
   async function flushPlayerState() {
     sendTimer = 0;
-    if (!pendingState || !playerRef || !firebase) return;
+    if (
+      !pendingState ||
+      !playerRef ||
+      !firebase ||
+      session.meta?.status !== "playing"
+    ) {
+      pendingState = null;
+      return;
+    }
     const nextState = pendingState;
     pendingState = null;
     lastSendAt = performance.now();
@@ -378,8 +455,12 @@
       !pendingWorldState ||
       !firebase ||
       !session.roomCode ||
-      session.role !== "host"
-    ) return;
+      session.role !== "host" ||
+      session.meta?.status !== "playing"
+    ) {
+      pendingWorldState = null;
+      return;
+    }
     const nextWorld = pendingWorldState;
     pendingWorldState = null;
     lastWorldSendAt = performance.now();
@@ -418,6 +499,7 @@
     if (leavingRole === "host") {
       await update(ref(database, `${ROOMS_PATH}/${leavingCode}/meta`), {
         status: "closed",
+        maxPlayers: MAX_PLAYERS,
         closedAt: Date.now()
       });
     }
@@ -466,6 +548,7 @@
       }
     },
     startMission,
+    returnToLobby,
     setTank,
     sendPlayerState,
     sendWorldState,

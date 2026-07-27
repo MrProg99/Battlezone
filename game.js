@@ -25,11 +25,19 @@
   const startButtonLabel = document.querySelector("#start-button-label");
   const startButtonHelp = document.querySelector("#start-button-help");
   const network = window.BattlezoneNetwork;
+  const cannonFireSound = new Audio("Son/CanonFire.mp3");
+  const tankExplosionSound = new Audio("Son/TankExplosion.mp3");
+  const metalImpactSound = new Audio("Son/MetalImpact.mp3");
+  cannonFireSound.preload = "auto";
+  tankExplosionSound.preload = "auto";
+  metalImpactSound.preload = "auto";
 
   const TAU = Math.PI * 2;
   const NEAR = 0.22;
   const WORLD_LIMIT = 76;
   const GRID_STEP = 6;
+  const COOP_ROLES = Object.freeze(["host", "guest", "guest2"]);
+  const MAX_COOP_PLAYERS = 3;
   const COLORS = {
     green: "#78ff9a",
     soft: "#2ea95c",
@@ -385,7 +393,8 @@
     configured: false,
     connected: false,
     players: {},
-    playerCount: 0
+    playerCount: 0,
+    maxPlayers: MAX_COOP_PLAYERS
   };
   let localStateSequence = 0;
   let localShotSequence = 0;
@@ -409,11 +418,13 @@
   const remoteWorldShells = [];
   const coopHealth = {
     host: 100,
-    guest: 100
+    guest: 100,
+    guest2: 100
   };
   const coopInvulnerability = {
     host: 0,
-    guest: 0
+    guest: 0,
+    guest2: 0
   };
   let kamikazeWarningTimer = 0;
 
@@ -480,7 +491,9 @@
     const connected = networkSnapshot.connected;
     const busy = ["connecting", "creating", "joining"].includes(networkSnapshot.phase);
     const isHost = networkSnapshot.role === "host";
+    const maxPlayers = networkSnapshot.maxPlayers ?? MAX_COOP_PLAYERS;
     const roomReady = connected && networkSnapshot.playerCount >= 2;
+    const roomFull = networkSnapshot.playerCount >= maxPlayers;
     joinFields.classList.toggle("hidden", playMode !== "join" || connected);
     roomReadout.classList.toggle("hidden", !connected);
     onlineActionButton.classList.toggle("hidden", connected);
@@ -491,22 +504,34 @@
     if (connected) {
       roomCodeLabel.textContent = networkSnapshot.roomCode;
       roomPlayerCount.textContent =
-        `${networkSnapshot.playerCount} / 2 chars connectés`;
+        `${networkSnapshot.playerCount} / ${maxPlayers} chars connectés`;
       networkStatus.classList.remove("error");
       if (networkSnapshot.meta?.status === "closed") {
         networkStatus.textContent = "L’hôte a fermé ce salon.";
       } else if (roomReady) {
-        networkStatus.textContent = isHost
-          ? "Coéquipier connecté. Mission prête."
-          : "Liaison établie. En attente du lancement.";
+        if (roomFull) {
+          networkStatus.textContent = isHost
+            ? "Escouade complète. Mission prête."
+            : "Escouade complète. En attente du lancement.";
+        } else {
+          networkStatus.textContent = isHost
+            ? "Mission prête. Un troisième char peut encore rejoindre."
+            : "Liaison établie. L’hôte peut partir ou attendre un troisième char.";
+        }
       } else {
         networkStatus.textContent = "En attente du deuxième joueur…";
       }
 
       startButton.disabled = !isHost || !roomReady || networkSnapshot.meta?.status !== "lobby";
-      startButtonLabel.textContent = isHost ? "Lancer la mission coop" : "En attente de l’hôte";
+      startButtonLabel.textContent = isHost
+        ? networkSnapshot.meta?.startedAt
+          ? "Relancer la mission coop"
+          : "Lancer la mission coop"
+        : "En attente de l’hôte";
       startButtonHelp.textContent = isHost
-        ? "Le largage commencera sur les deux ordinateurs"
+        ? roomFull
+          ? "Le largage commencera sur les trois ordinateurs"
+          : "Lancer à deux ou attendre le troisième joueur"
         : "L’hôte contrôle le départ";
       return;
     }
@@ -514,7 +539,7 @@
     startButton.disabled = true;
     startButtonLabel.textContent =
       playMode === "host" ? "Créez d’abord un salon" : "Rejoignez d’abord un salon";
-    startButtonHelp.textContent = "La mission démarrera quand les deux chars seront prêts";
+    startButtonHelp.textContent = "La mission démarrera dès qu’au moins deux chars seront prêts";
     networkStatus.classList.toggle("error", Boolean(networkSnapshot.error));
 
     if (!networkSnapshot.configured) {
@@ -578,8 +603,7 @@
       const remote = remotePlayers.get(uid);
       if (remote) {
         if (
-          isWorldAuthority() &&
-          target.role === "guest" &&
+          (isWorldAuthority() || target.role !== "host") &&
           target.shotSequence > (remote.lastShotSequence ?? 0)
         ) {
           spawnRemotePlayerShot(target);
@@ -607,10 +631,20 @@
     const previousStatus = networkSnapshot.meta?.status;
     networkSnapshot = snapshot;
     reconcileRemotePlayers(snapshot);
-    if (snapshot.role === "guest" && snapshot.world) {
+    if (snapshot.role !== "host" && snapshot.world) {
       applySharedWorld(snapshot.world);
     }
     updateLobbyUi();
+
+    if (
+      snapshot.connected &&
+      previousStatus === "playing" &&
+      snapshot.meta?.status === "lobby" &&
+      running &&
+      !gameOver
+    ) {
+      endGame();
+    }
 
     if (
       snapshot.connected &&
@@ -697,14 +731,19 @@
     player.wave = Number(world.wave) || 0;
     player.score = Number(world.score) || 0;
     player.kills = Number(world.kills) || 0;
-    coopHealth.host = Number(world.health?.host ?? coopHealth.host);
-    coopHealth.guest = Number(world.health?.guest ?? coopHealth.guest);
-    player.health = Math.max(0, Math.min(100, coopHealth.guest));
+    for (const role of COOP_ROLES) {
+      coopHealth[role] = Number(world.health?.[role] ?? coopHealth[role]);
+    }
+    player.health = Math.max(
+      0,
+      Math.min(100, coopHealth[networkSnapshot.role] ?? player.health)
+    );
     sharedGameOver = Boolean(world.gameOver);
 
     if (player.health < previousHealth) {
       flash = 1;
       screenShake = Math.max(screenShake, 12);
+      playMetalImpactSound(player.x, player.z, 1.05);
       tone(92, 0.25, "sawtooth", 0.08, -45);
     }
 
@@ -731,6 +770,7 @@
               24,
               0.4 + (enemies[i].elevation ?? 0)
             );
+            playTankExplosionSound(enemies[i].x, enemies[i].z);
           }
         }
         enemies.splice(i, 1);
@@ -772,7 +812,10 @@
         };
         enemies.push(enemy);
       } else {
-        if (target.health < enemy.health) enemy.hitFlash = 0.14;
+        if (target.health < enemy.health) {
+          enemy.hitFlash = 0.14;
+          if (target.health > 0) playMetalImpactSound(target.x, target.z);
+        }
         if (target.shieldCharge < (enemy.shieldCharge ?? 0)) {
           enemy.shieldFlash = 0.3;
         } else if (target.shieldCharge > (enemy.shieldCharge ?? 0)) {
@@ -837,7 +880,7 @@
   }
 
   function updateReplicatedWorld(dt) {
-    if (!isCoopGame() || networkSnapshot.role !== "guest") return;
+    if (!isCoopGame() || networkSnapshot.role === "host") return;
     const blend = 1 - Math.exp(-dt * 14);
     for (const enemy of enemies) {
       if (!enemy.networkTarget) continue;
@@ -963,7 +1006,8 @@
       kills: player.kills,
       health: {
         host: Math.round(coopHealth.host),
-        guest: Math.round(coopHealth.guest)
+        guest: Math.round(coopHealth.guest),
+        guest2: Math.round(coopHealth.guest2)
       },
       gameOver: sharedGameOver,
       enemies: enemyStates,
@@ -3015,9 +3059,14 @@
     const tank = getPlayerTank();
     const range = Math.round(tank.shellSpeed * tank.shellLifetime * 10);
     const coop = playMode !== "solo" && networkSnapshot.connected;
-    const allyHealth = networkSnapshot.role === "host"
-      ? coopHealth.guest
-      : coopHealth.host;
+    const allyRoles = Object.values(networkSnapshot.players ?? {})
+      .map((record) => record?.role)
+      .filter((role) => role && role !== networkSnapshot.role);
+    const allyHealths = allyRoles.map((role) => coopHealth[role] ?? 100);
+    const allyHealth = allyHealths.length > 0 ? Math.min(...allyHealths) : 100;
+    const allyHealthText = allyHealths.length > 1
+      ? `${allyHealths.map((health) => Math.ceil(health)).join("/")}%`
+      : `${Math.ceil(allyHealth)}%`;
 
     ctx.save();
     ctx.font = `${compact ? 7 : 9}px Courier New`;
@@ -3042,8 +3091,8 @@
     ctx.fillText(
       coop
         ? compact
-          ? `COOP ${networkSnapshot.playerCount}/2`
-          : `COOP ${networkSnapshot.playerCount}/2 // ${networkSnapshot.roomCode}`
+          ? `COOP ${networkSnapshot.playerCount}/${MAX_COOP_PLAYERS}`
+          : `COOP ${networkSnapshot.playerCount}/${MAX_COOP_PLAYERS} // ${networkSnapshot.roomCode}`
         : compact
           ? "SYS OK"
           : "SYSTEMES NOMINAUX",
@@ -3087,8 +3136,8 @@
         gaugeTop + (gaugeHeight + gaugeGap) * 2,
         leftWidth,
         gaugeHeight,
-        "COEQUIPIER",
-        `${Math.ceil(allyHealth)}%`,
+        allyHealths.length > 1 ? "COEQUIPIERS" : "COEQUIPIER",
+        allyHealthText,
         allyHealth / 100,
         COLORS.cyan,
         compact
@@ -3483,7 +3532,10 @@
 
   function spawnWave() {
     player.wave += 1;
-    const count = Math.min(3 + player.wave, 9);
+    const squadBonus = isCoopGame()
+      ? Math.max(0, networkSnapshot.playerCount - 2) * 2
+      : 0;
+    const count = Math.min(3 + player.wave + squadBonus, 9 + squadBonus);
     for (let i = 0; i < count; i += 1) {
       const type = getWaveEnemyType(i, count);
       const minimumRange =
@@ -3548,12 +3600,13 @@
     tankDebris.length = 0;
     enemySerial = 0;
     shellSerial = 0;
-    const coopSpawnX =
-      playMode === "solo"
-        ? 0
-        : networkSnapshot.role === "host"
-          ? -2.2
-          : 2.2;
+    const coopSpawnX = playMode === "solo"
+      ? 0
+      : networkSnapshot.role === "host"
+        ? -2.8
+        : networkSnapshot.role === "guest"
+          ? 2.8
+          : 0;
     Object.assign(player, {
       tankId: selectedTankId,
       x: coopSpawnX,
@@ -3585,10 +3638,10 @@
     sharedWorldSequence = 0;
     appliedWorldSequence = -1;
     sharedGameOver = false;
-    coopHealth.host = 100;
-    coopHealth.guest = 100;
-    coopInvulnerability.host = 0;
-    coopInvulnerability.guest = 0;
+    for (const role of COOP_ROLES) {
+      coopHealth[role] = 100;
+      coopInvulnerability[role] = 0;
+    }
     lastLocalShot = {
       x: coopSpawnX,
       z: 4,
@@ -3610,6 +3663,7 @@
 
   function startGame() {
     initAudio();
+    remotePlayers.clear();
     resetGame();
     running = true;
     startScreen.classList.add("hidden");
@@ -3618,29 +3672,48 @@
   }
 
   function returnToHangar() {
+    const keepCoopRoom =
+      playMode !== "solo" &&
+      networkSnapshot.connected &&
+      networkSnapshot.meta?.status !== "closed";
+    if (
+      keepCoopRoom &&
+      networkSnapshot.role === "host" &&
+      networkSnapshot.meta?.status === "playing"
+    ) {
+      network.returnToLobby().catch(() => {});
+    }
     resetGame();
     running = false;
     missionPhase = MISSION_PHASE.IDLE;
     player.altitude = 0;
     cameraPitch = 0;
     remotePlayers.clear();
-    if (playMode !== "solo" && networkSnapshot.connected) {
+    if (!keepCoopRoom && playMode !== "solo" && networkSnapshot.connected) {
       network.leaveRoom().catch(() => {});
     }
     startScreen.classList.remove("hidden");
     document.exitPointerLock?.();
+    updateLobbyUi();
   }
 
   function endGame() {
+    if (gameOver) return;
     gameOver = true;
     running = false;
     document.exitPointerLock?.();
     messageKicker.textContent = "SIGNAL DU CHAR PERDU";
     messageTitle.textContent = "MISSION TERMINÉE";
+    const coopReplayMessage = isCoopGame()
+      ? " Le salon reste connecté pour lancer une nouvelle mission."
+      : "";
     messageCopy.textContent =
-      `Score ${String(player.score).padStart(6, "0")} · ${player.kills} tanks neutralisés · vague ${player.wave} atteinte.`;
+      `Score ${String(player.score).padStart(6, "0")} · ${player.kills} tanks neutralisés · vague ${player.wave} atteinte.${coopReplayMessage}`;
     messagePanel.classList.remove("hidden");
     tone(130, 0.5, "sawtooth", 0.05);
+    if (isCoopGame() && networkSnapshot.role === "host") {
+      network.returnToLobby().catch(() => {});
+    }
   }
 
   function togglePause() {
@@ -3657,6 +3730,40 @@
       if (AudioCtor) audioContext = new AudioCtor();
     }
     if (audioContext?.state === "suspended") audioContext.resume();
+  }
+
+  function playCannonFireSound() {
+    const sound = cannonFireSound.cloneNode();
+    sound.volume = 0.72;
+    sound.play().catch(() => {
+      // Le navigateur peut bloquer le tout premier son hors geste utilisateur.
+    });
+  }
+
+  function playTankExplosionSound(x, z, intensity = 1) {
+    const explosionDistance = Math.hypot(x - player.x, z - player.z);
+    const hearingRange = 70;
+    if (explosionDistance >= hearingRange) return;
+    const proximity = 1 - explosionDistance / hearingRange;
+    const sound = tankExplosionSound.cloneNode();
+    sound.volume = Math.min(1, (0.06 + proximity ** 1.45 * 0.88) * intensity);
+    sound.playbackRate = 0.96 + Math.random() * 0.08;
+    sound.play().catch(() => {
+      // Le navigateur peut bloquer le tout premier son hors geste utilisateur.
+    });
+  }
+
+  function playMetalImpactSound(x, z, intensity = 1) {
+    const impactDistance = Math.hypot(x - player.x, z - player.z);
+    const hearingRange = 56;
+    if (impactDistance >= hearingRange) return;
+    const proximity = 1 - impactDistance / hearingRange;
+    const sound = metalImpactSound.cloneNode();
+    sound.volume = Math.min(1, (0.04 + proximity ** 1.6 * 0.68) * intensity);
+    sound.playbackRate = 0.98 + Math.random() * 0.06;
+    sound.play().catch(() => {
+      // Le navigateur peut bloquer le tout premier son hors geste utilisateur.
+    });
   }
 
   function tone(frequency, duration, type = "square", volume = 0.025, slide = 0) {
@@ -3857,6 +3964,7 @@
       tankId: player.tankId
     };
     createMuzzleSmoke(yaw);
+    playCannonFireSound();
     player.reload = tank.reloadTime;
     screenShake = 5;
     tone(74, 0.12, "sawtooth", 0.07, -28);
@@ -4588,18 +4696,18 @@
     }];
     if (isCoopGame() && networkSnapshot.role === "host") {
       for (const remote of remotePlayers.values()) {
+        const remoteHealth = coopHealth[remote.role] ?? remote.health;
         if (
-          remote.role !== "guest" ||
           remote.missionPhase !== MISSION_PHASE.COMBAT ||
-          coopHealth.guest <= 0
+          remoteHealth <= 0
         ) continue;
         targets.push({
-          role: "guest",
+          role: remote.role,
           x: remote.x,
           z: remote.z,
           heading: remote.heading,
           speed: 0,
-          health: coopHealth.guest
+          health: remoteHealth
         });
       }
     }
@@ -4971,11 +5079,12 @@
     if (player.invulnerable > 0 || gameOver) return;
     player.health = Math.max(0, player.health - amount);
     if (isCoopGame() && networkSnapshot.role === "host") {
-      coopHealth.host = player.health;
+      coopHealth[networkSnapshot.role] = player.health;
     }
     player.invulnerable = 0.55;
     flash = 1;
     screenShake = Math.max(screenShake, shake);
+    if (player.health > 0) playMetalImpactSound(impactX, impactZ, 1.05);
     burst(impactX, impactZ, COLORS.red, 18);
     tone(92, 0.25, "sawtooth", 0.08, -45);
     if (player.health <= 0) {
@@ -4994,15 +5103,17 @@
     }
     if (
       networkSnapshot.role !== "host" ||
-      role !== "guest" ||
-      coopInvulnerability.guest > 0 ||
+      !COOP_ROLES.includes(role) ||
+      role === "host" ||
+      coopInvulnerability[role] > 0 ||
       sharedGameOver
     ) return;
-    coopHealth.guest = Math.max(0, coopHealth.guest - amount);
-    coopInvulnerability.guest = 0.55;
+    coopHealth[role] = Math.max(0, coopHealth[role] - amount);
+    coopInvulnerability[role] = 0.55;
+    if (coopHealth[role] > 0) playMetalImpactSound(impactX, impactZ);
     burst(impactX, impactZ, COLORS.red, 18);
     tone(82, 0.18, "sawtooth", 0.025, -35);
-    if (coopHealth.guest <= 0) {
+    if (coopHealth[role] <= 0) {
       sharedGameOver = true;
       publishSharedWorld();
       endGame();
@@ -5017,6 +5128,7 @@
 
   function createKamikazeExplosionEffects(enemy) {
     createTankDebris(enemy);
+    playTankExplosionSound(enemy.x, enemy.z, 1.08);
     burst(enemy.x, enemy.z, COLORS.red, 44);
     burst(enemy.x, enemy.z, COLORS.amber, 24);
     createBlastSmoke(enemy.x, enemy.z);
@@ -5060,6 +5172,7 @@
       32,
       0.4 + (enemy.elevation ?? 0)
     );
+    playTankExplosionSound(enemy.x, enemy.z);
     screenShake = Math.max(screenShake, 9);
     tone(58, 0.34, "sawtooth", 0.08, -20);
     return true;
@@ -5255,6 +5368,7 @@
           if (enemy.health <= 0) {
             destroyEnemy(enemy, true);
           } else {
+            playMetalImpactSound(shell.x, shell.z);
             player.score += 25;
           }
         }
@@ -5391,7 +5505,9 @@
     updateScreenEffects(dt);
     waveBanner = Math.max(0, waveBanner - dt);
 
-    coopInvulnerability.guest = Math.max(0, coopInvulnerability.guest - dt);
+    for (const role of COOP_ROLES) {
+      coopInvulnerability[role] = Math.max(0, coopInvulnerability[role] - dt);
+    }
 
     if (isWorldAuthority() && enemies.length === 0 && !gameOver) {
       waveBanner -= dt;
@@ -5402,7 +5518,11 @@
         player.health = Math.min(100, player.health + 12);
         if (isCoopGame() && networkSnapshot.role === "host") {
           coopHealth.host = player.health;
-          coopHealth.guest = Math.min(100, coopHealth.guest + 12);
+          for (const role of COOP_ROLES) {
+            if (role !== "host") {
+              coopHealth[role] = Math.min(100, coopHealth[role] + 12);
+            }
+          }
         }
         spawnWave();
       }

@@ -20,7 +20,7 @@ Puis ouvrir `http://localhost:8000`.
 
 Le premier jalon multijoueur utilise Firebase Authentication anonyme et Firebase
 Realtime Database. Le jeu local reste fluide à 60 images/s; les positions des
-deux joueurs sont envoyées environ 10 fois par seconde puis interpolées.
+trois joueurs sont envoyées environ 10 fois par seconde puis interpolées.
 Les données de ce jeu sont isolées sous `battlezone/rooms`, ce qui permet de
 partager une Realtime Database avec un autre projet utilisant déjà `rooms`.
 
@@ -40,8 +40,10 @@ py -m http.server 8000
 
 Chaque joueur ouvre ensuite le jeu sur son propre ordinateur. Le premier choisit
 **Créer coop** et partage le code de cinq caractères. Le second choisit
-**Rejoindre** et entre ce code. Quand les deux chars sont connectés, l’hôte lance
-la mission et le largage démarre chez les deux joueurs.
+**Rejoindre** et entre ce code. Un troisième joueur peut utiliser le même code.
+Dès que deux chars sont connectés, l’hôte peut lancer la mission ou attendre que
+l’escouade de trois soit complète. Le largage démarre simultanément chez tous les
+joueurs présents.
 
 Le fichier `firebase.json` permet aussi de publier les règles et le site avec la
 CLI Firebase une fois le projet associé :
@@ -59,20 +61,20 @@ Realtime Database.
 
 Ce premier jalon synchronise :
 
-- le salon privé à deux joueurs et son code d’invitation;
+- le salon privé de deux à trois joueurs et son code d’invitation;
 - la présence et la déconnexion;
-- le type, la position, l’orientation, la tourelle et le blindage des deux chars;
+- le type, la position, l’orientation, la tourelle et le blindage des trois chars;
 - le départ de mission déclenché par l’hôte;
 - la disposition des rochers grâce à une graine de monde commune.
 - les vagues, les ennemis, leurs tourelles et leurs obus;
 - l'altitude et le cycle d'attaque des drones volants;
-- les tirs des deux joueurs et les dégâts infligés aux mêmes cibles;
+- les tirs des trois joueurs et les dégâts infligés aux mêmes cibles;
 - le score, les éliminations et le blindage partagé;
-- la fin de mission commune si l’un des deux chars est détruit.
+- la fin de mission commune si l’un des chars est détruit.
 
-L’hôte est l’unique autorité de la simulation de combat. L’invité contrôle son
-char localement pour conserver une conduite fluide, transmet ses tirs, puis
-interpole le monde partagé reçu depuis `battlezone/rooms/<code>/world`.
+L’hôte est l’unique autorité de la simulation de combat. Les invités contrôlent
+leur char localement pour conserver une conduite fluide, transmettent leurs tirs,
+puis interpolent le monde partagé reçu depuis `battlezone/rooms/<code>/world`.
 
 ## Commandes
 

@@ -114,6 +114,19 @@
     range: Object.freeze({ label: "TRAJECTOIRE", rangeMultiplier: 0.15 })
   });
   const UPGRADE_IDS = Object.freeze(["speed", "armor", "range"]);
+  const ARMOR_POWERUP = Object.freeze({
+    STARTING_WAVE: 3,
+    CHARGE: 42,
+    MAX_CHARGE: 84,
+    PICKUP_RADIUS: 3.8,
+    SPAWN_MIN_RANGE: 16,
+    SPAWN_MAX_RANGE: 40
+  });
+  const VOLCANO_EFFECT = Object.freeze({
+    EMISSION_DISTANCE: 118,
+    RENDER_DISTANCE: 158,
+    MAX_PARTICLES: 38
+  });
   const MOON_WORLD_AZIMUTH = 0.48;
   const ENEMY_TYPES = Object.freeze({
     assault: Object.freeze({
@@ -284,6 +297,34 @@
       score: 300,
       static: true,
       priority: true
+    }),
+    hangar: Object.freeze({
+      id: "hangar",
+      label: "HANGAR",
+      code: "H",
+      health: 5,
+      speed: 0,
+      speedVariance: 0,
+      preferredRangeMin: 0,
+      preferredRangeMax: 0,
+      scale: 2.25,
+      hitRadius: 2.15,
+      turretTurnRate: 0,
+      fireRange: 0,
+      fireAlignment: 0,
+      reloadBase: 99,
+      reloadMin: 99,
+      reloadJitter: 0,
+      shellSpeed: 0,
+      shellLifetime: 0,
+      score: 600,
+      static: true,
+      priority: true,
+      support: true,
+      hangar: true,
+      productionDelay: 4.5,
+      productionInterval: 10,
+      productionCap: 3
     })
   });
   const MISSION_PHASE = Object.freeze({
@@ -421,6 +462,9 @@
   let landingPulse = 0;
   let enemySerial = 0;
   let shellSerial = 0;
+  let armorPowerupSerial = 0;
+  let armorPickupSequence = 0;
+  let appliedArmorPickupSequence = 0;
   let audioContext = null;
   let motorSoundStarted = false;
   let motorSoundStarting = false;
@@ -450,6 +494,7 @@
   let lastLocalPulse = { x: 0, z: 4 };
   let latestSharedPulse = null;
   let recentLocalPulseVisual = null;
+  let latestArmorPickup = null;
   let localUpgradeChoice = "";
   const upgradeState = {
     active: false,
@@ -465,15 +510,22 @@
   const keys = new Set();
   const enemies = [];
   const shells = [];
+  const armorPowerups = [];
   const particles = [];
   const tankDebris = [];
   const rocks = [];
+  const volcanoes = [];
   const remotePlayers = new Map();
   const remoteWorldShells = [];
   const coopHealth = {
     host: 100,
     guest: 100,
     guest2: 100
+  };
+  const coopArmor = {
+    host: 0,
+    guest: 0,
+    guest2: 0
   };
   const coopInvulnerability = {
     host: 0,
@@ -513,6 +565,20 @@
 
   function getRoleUpgrades(role) {
     return upgradeState.stats[role] ?? createUpgradeLevels();
+  }
+
+  function getRoleArmor(role) {
+    return Math.max(0, Math.min(ARMOR_POWERUP.MAX_CHARGE, Number(coopArmor[role]) || 0));
+  }
+
+  function getMitigatedPlayerDamage(role, amount) {
+    const armorLevel = getRoleUpgrades(role).armor;
+    return Math.max(
+      1,
+      Math.round(
+        amount * Math.pow(1 - TANK_UPGRADES.armor.damageReduction, armorLevel)
+      )
+    );
   }
 
   function getTankStats(tankId, upgrades = createUpgradeLevels()) {
@@ -930,6 +996,13 @@
     player.kills = Number(world.kills) || 0;
     for (const role of COOP_ROLES) {
       coopHealth[role] = Number(world.health?.[role] ?? coopHealth[role]);
+      coopArmor[role] = Math.max(
+        0,
+        Math.min(
+          ARMOR_POWERUP.MAX_CHARGE,
+          Number(world.armor?.[role] ?? coopArmor[role]) || 0
+        )
+      );
     }
     player.health = Math.max(
       0,
@@ -937,6 +1010,31 @@
     );
     sharedGameOver = Boolean(world.gameOver);
     applySharedUpgradeState(world.upgrade);
+
+    const incomingArmorPowerups = firebaseValues(world.armorPowerups)
+      .map((powerup) => ({
+        id: Number(powerup.id),
+        x: Number(powerup.x),
+        z: Number(powerup.z)
+      }))
+      .filter(
+        (powerup) =>
+          Number.isFinite(powerup.id) &&
+          Number.isFinite(powerup.x) &&
+          Number.isFinite(powerup.z)
+      );
+    armorPowerups.splice(0, armorPowerups.length, ...incomingArmorPowerups);
+
+    const incomingArmorPickup = world.armorPickup;
+    const incomingArmorPickupSequence =
+      Number(incomingArmorPickup?.sequence) || 0;
+    if (incomingArmorPickupSequence > appliedArmorPickupSequence) {
+      appliedArmorPickupSequence = incomingArmorPickupSequence;
+      createArmorPickupEffects(
+        Number(incomingArmorPickup.x),
+        Number(incomingArmorPickup.z)
+      );
+    }
 
     const incomingPulse = world.pulse;
     const incomingPulseSequence = Number(incomingPulse?.sequence) || 0;
@@ -1214,6 +1312,15 @@
       shellStates[`s${shell.id}`] = state;
     }
 
+    const armorPowerupStates = {};
+    for (const powerup of armorPowerups) {
+      armorPowerupStates[`a${powerup.id}`] = {
+        id: powerup.id,
+        x: Number(powerup.x.toFixed(3)),
+        z: Number(powerup.z.toFixed(3))
+      };
+    }
+
     return {
       sequence: ++sharedWorldSequence,
       wave: player.wave,
@@ -1224,7 +1331,13 @@
         guest: Math.round(coopHealth.guest),
         guest2: Math.round(coopHealth.guest2)
       },
+      armor: {
+        host: Math.round(getRoleArmor("host")),
+        guest: Math.round(getRoleArmor("guest")),
+        guest2: Math.round(getRoleArmor("guest2"))
+      },
       pulse: latestSharedPulse,
+      armorPickup: latestArmorPickup,
       upgrade: {
         active: upgradeState.active,
         round: upgradeState.round,
@@ -1238,6 +1351,7 @@
       gameOver: sharedGameOver,
       enemies: enemyStates,
       shells: shellStates,
+      armorPowerups: armorPowerupStates,
       updatedAt: Date.now()
     };
   }
@@ -1540,6 +1654,56 @@
     for (let i = 0; i < base.length; i += 1) {
       line3d(base[i], base[(i + 1) % base.length], COLORS.dim, 1, 0.62);
       line3d(base[i], top, COLORS.dim, 1, 0.62);
+    }
+  }
+
+  function drawVolcano(volcano) {
+    if (distance(player, volcano) > VOLCANO_EFFECT.RENDER_DISTANCE) return;
+    const segments = volcano.profile.length;
+    const base = [];
+    const shoulder = [];
+    const crater = [];
+    const innerCrater = [];
+    const craterPulse = 0.58 + Math.sin(performance.now() * 0.0035) * 0.18;
+
+    for (let index = 0; index < segments; index += 1) {
+      const angle = volcano.rotation + index / segments * TAU;
+      const irregularity = volcano.profile[index];
+      const sin = Math.sin(angle);
+      const cos = Math.cos(angle);
+      base.push({
+        x: volcano.x + sin * volcano.radius * irregularity,
+        y: 0.03,
+        z: volcano.z + cos * volcano.radius * irregularity
+      });
+      shoulder.push({
+        x: volcano.x + sin * volcano.radius * 0.53 * (0.94 + irregularity * 0.06),
+        y: volcano.height * 0.48,
+        z: volcano.z + cos * volcano.radius * 0.53 * (0.94 + irregularity * 0.06)
+      });
+      crater.push({
+        x: volcano.x + sin * volcano.craterRadius,
+        y: volcano.height + Math.sin(index * 1.9) * 0.12,
+        z: volcano.z + cos * volcano.craterRadius
+      });
+      innerCrater.push({
+        x: volcano.x + sin * volcano.craterRadius * 0.58,
+        y: volcano.height - 0.28,
+        z: volcano.z + cos * volcano.craterRadius * 0.58
+      });
+    }
+
+    for (let index = 0; index < segments; index += 1) {
+      const next = (index + 1) % segments;
+      line3d(base[index], base[next], COLORS.dim, 1, 0.56);
+      line3d(shoulder[index], shoulder[next], COLORS.soft, 1, 0.48);
+      line3d(crater[index], crater[next], COLORS.amber, 1.35, craterPulse);
+      line3d(innerCrater[index], innerCrater[next], COLORS.red, 1.1, craterPulse * 0.72);
+      line3d(base[index], shoulder[index], COLORS.dim, 0.9, 0.52);
+      line3d(shoulder[index], crater[index], COLORS.soft, 1, 0.58);
+      if (index % 2 === 0) {
+        line3d(base[index], crater[index], COLORS.dim, 0.75, 0.28);
+      }
     }
   }
 
@@ -2036,6 +2200,75 @@
     line3d(barrelStart, barrelEnd, color, 2.4, fade);
   }
 
+  function drawHangarEnemy(enemy, type, color, fade) {
+    const scale = type.scale;
+    const pulse = 0.62 + Math.sin(performance.now() * 0.008 + enemy.id) * 0.22;
+    const buildingHalfWidth = 1.32 * scale;
+    const buildingHeight = 1.03 * scale;
+    const buildingHalfDepth = 1.12 * scale;
+    drawBox(
+      enemy,
+      [buildingHalfWidth, buildingHeight, buildingHalfDepth],
+      enemy.heading,
+      color,
+      fade
+    );
+
+    const roof = buildTankVertices(enemy, enemy.heading, scale, [
+      [-1.32, 1.03, -1.12], [1.32, 1.03, -1.12],
+      [1.32, 1.03, 1.12], [-1.32, 1.03, 1.12],
+      [-0.9, 1.54, -0.72], [0.9, 1.54, -0.72],
+      [0.9, 1.54, 0.72], [-0.9, 1.54, 0.72]
+    ]);
+    drawTankEdges(roof, [
+      [0, 4], [1, 5], [2, 6], [3, 7],
+      [4, 5], [5, 6], [6, 7], [7, 4]
+    ], color, fade, 1.4);
+
+    const door = buildTankVertices(enemy, enemy.heading, scale, [
+      [-0.72, 0.08, 1.125], [0.72, 0.08, 1.125],
+      [0.72, 0.96, 1.125], [-0.72, 0.96, 1.125]
+    ]);
+    drawTankEdges(door, [[0, 1], [1, 2], [2, 3], [3, 0]], COLORS.amber, fade * pulse, 1.7);
+    for (let i = 1; i <= 3; i += 1) {
+      const left = orientedPoint(
+        enemy,
+        -0.72 * scale,
+        (0.08 + i * 0.22) * scale,
+        1.13 * scale,
+        enemy.heading
+      );
+      const right = orientedPoint(
+        enemy,
+        0.72 * scale,
+        (0.08 + i * 0.22) * scale,
+        1.13 * scale,
+        enemy.heading
+      );
+      drawTankEdge(left, right, COLORS.amber, fade * pulse * 0.5, 0.85);
+    }
+
+    const antennaBase = orientedPoint(enemy, 0, buildingHeight, -0.38 * scale, enemy.heading);
+    const antennaTop = { ...antennaBase, y: antennaBase.y + 0.8 * scale };
+    drawTankEdge(antennaBase, antennaTop, color, fade, 1.25);
+    for (const side of [-1, 1]) {
+      const strut = orientedPoint(
+        enemy,
+        side * 0.5 * scale,
+        buildingHeight,
+        -0.62 * scale,
+        enemy.heading
+      );
+      drawTankEdge(strut, antennaTop, color, fade * 0.78, 0.9);
+    }
+
+    for (const lane of [-0.48, 0.48]) {
+      const start = orientedPoint(enemy, lane * scale, 0.025, 1.2 * scale, enemy.heading);
+      const end = orientedPoint(enemy, lane * scale, 0.025, 3.05 * scale, enemy.heading);
+      line3d(start, end, COLORS.amber, 1, fade * pulse * 0.45);
+    }
+  }
+
   function drawGuardianAura(enemy, fade) {
     const pulse =
       GUARDIAN_SHIELD_RADIUS +
@@ -2238,6 +2471,8 @@
         (enemy.elevation ?? 0) +
         (type.id === "artillery"
           ? 1
+          : type.hangar
+            ? 1.3 * type.scale
           : type.id === "guardian"
             ? 1.18 * type.scale
             : 0.85 * type.scale),
@@ -2272,6 +2507,8 @@
       drawDroneEnemy(enemy, type, modelColor, fade);
     } else if (type.id === "artillery") {
       drawArtilleryEnemy(enemy, modelColor, fade);
+    } else if (type.hangar) {
+      drawHangarEnemy(enemy, type, modelColor, fade);
     } else {
       drawMobileEnemy(enemy, type, modelColor, fade);
     }
@@ -2454,6 +2691,61 @@
       z: shell.z - shell.vz * 0.045
     };
     line3d(tail, shell, color, 1.5, 0.7);
+  }
+
+  function drawArmorPowerup(powerup) {
+    const phase = performance.now() * 0.0022 + powerup.id * 1.37;
+    const pulse = 0.7 + Math.sin(phase * 2.2) * 0.2;
+    const radius = 0.72;
+    const baseY = 0.16;
+    const topY = 1.42;
+    const segments = 6;
+
+    for (let index = 0; index < segments; index += 1) {
+      const angleA = phase + index / segments * TAU;
+      const angleB = phase + (index + 1) / segments * TAU;
+      const baseA = {
+        x: powerup.x + Math.sin(angleA) * radius,
+        y: baseY,
+        z: powerup.z + Math.cos(angleA) * radius
+      };
+      const baseB = {
+        x: powerup.x + Math.sin(angleB) * radius,
+        y: baseY,
+        z: powerup.z + Math.cos(angleB) * radius
+      };
+      const upperA = { ...baseA, y: 0.72 };
+      const upperB = { ...baseB, y: 0.72 };
+      line3d(baseA, baseB, COLORS.cyan, 1.15, 0.64 + pulse * 0.24);
+      line3d(upperA, upperB, COLORS.cyan, 1.6, 0.78 + pulse * 0.2);
+      if (index % 2 === 0) line3d(baseA, upperA, COLORS.green, 0.9, 0.5);
+    }
+
+    const diamond = [
+      { x: powerup.x, y: topY, z: powerup.z },
+      { x: powerup.x + 0.48, y: 0.8, z: powerup.z },
+      { x: powerup.x, y: 0.28, z: powerup.z },
+      { x: powerup.x - 0.48, y: 0.8, z: powerup.z }
+    ];
+    for (let index = 0; index < diamond.length; index += 1) {
+      line3d(
+        diamond[index],
+        diamond[(index + 1) % diamond.length],
+        COLORS.cyan,
+        1.9,
+        0.86
+      );
+    }
+
+    const marker = project({ x: powerup.x, y: topY + 0.28, z: powerup.z });
+    if (!marker || marker.depth >= 42) return;
+    ctx.save();
+    ctx.globalAlpha = 0.88;
+    ctx.fillStyle = COLORS.cyan;
+    ctx.font = "8px Courier New";
+    ctx.textAlign = "center";
+    ctx.fillText("BLINDAGE +42", marker.x, marker.y);
+    ctx.restore();
   }
 
   function drawParticle(particle) {
@@ -3128,6 +3420,30 @@
       }
     }
 
+    for (const powerup of armorPowerups) {
+      const dx = powerup.x - player.x;
+      const dz = powerup.z - player.z;
+      const right = dx * Math.cos(yaw) - dz * Math.sin(yaw);
+      const forward = dx * Math.sin(yaw) + dz * Math.cos(yaw);
+      const px = (right / range) * radius;
+      const py = (-forward / range) * radius;
+      const length = Math.hypot(px, py);
+      const scale = length > radius - 4 ? (radius - 4) / length : 1;
+      const markerX = px * scale;
+      const markerY = py * scale;
+      const markerSize = 3.6 + Math.sin(performance.now() * 0.01 + powerup.id) * 0.75;
+      ctx.save();
+      ctx.translate(markerX, markerY);
+      ctx.rotate(Math.PI / 4);
+      ctx.strokeStyle = COLORS.cyan;
+      ctx.fillStyle = COLORS.cyan;
+      ctx.globalAlpha = 0.88;
+      ctx.strokeRect(-markerSize, -markerSize, markerSize * 2, markerSize * 2);
+      ctx.globalAlpha = 0.45;
+      ctx.fillRect(-1.2, -1.2, 2.4, 2.4);
+      ctx.restore();
+    }
+
     for (const remote of remotePlayers.values()) {
       if (remote.missionPhase !== MISSION_PHASE.COMBAT) continue;
       const dx = remote.x - player.x;
@@ -3304,6 +3620,7 @@
     const armorReduction = Math.round(
       (1 - Math.pow(1 - TANK_UPGRADES.armor.damageReduction, armorLevel)) * 100
     );
+    const armorCharge = Math.round(getRoleArmor(getLocalRole()));
 
     ctx.save();
     ctx.font = `${compact ? 7 : 9}px Courier New`;
@@ -3373,14 +3690,26 @@
       gaugeTop + gaugeHeight + gaugeGap,
       leftWidth,
       gaugeHeight,
-      armorLevel > 0 ? `BLINDAGE +${armorLevel}` : "BLINDAGE",
-      armorLevel > 0
+      armorCharge > 0
+        ? `BOUCLIER ${armorCharge}`
+        : armorLevel > 0
+          ? `BLINDAGE +${armorLevel}`
+          : "BLINDAGE",
+      armorCharge > 0
         ? compact
-          ? `-${armorReduction}%`
-          : `${Math.ceil(player.health)}% // -${armorReduction}%`
-        : `${Math.ceil(player.health)}%`,
+          ? `HP ${Math.ceil(player.health)} // +${armorCharge}`
+          : `${Math.ceil(player.health)}% // RESERVE ${armorCharge}`
+        : armorLevel > 0
+          ? compact
+            ? `-${armorReduction}%`
+            : `${Math.ceil(player.health)}% // -${armorReduction}%`
+          : `${Math.ceil(player.health)}%`,
       player.health / 100,
-      player.health < 30 ? COLORS.red : COLORS.green,
+      armorCharge > 0
+        ? COLORS.cyan
+        : player.health < 30
+          ? COLORS.red
+          : COLORS.green,
       compact
     );
     if (coop) {
@@ -3593,6 +3922,10 @@
     drawGround();
 
     const renderables = [
+      ...volcanoes.map((volcano) => ({
+        depth: distance(player, volcano),
+        draw: () => drawVolcano(volcano)
+      })),
       ...rocks.map((rock) => ({
         depth: distance(player, rock),
         draw: () => drawRock(rock)
@@ -3604,6 +3937,10 @@
       ...enemies.map((enemy) => ({
         depth: distance(player, enemy),
         draw: () => drawEnemy(enemy)
+      })),
+      ...armorPowerups.map((powerup) => ({
+        depth: distance(player, powerup),
+        draw: () => drawArmorPowerup(powerup)
       })),
       ...shells.map((shell) => ({
         depth: distance(player, shell),
@@ -3681,7 +4018,7 @@
     return ENEMY_TYPES.assault;
   }
 
-  function createEnemy(type, position) {
+  function createEnemy(type, position, options = {}) {
     const initialHeading = Math.atan2(
       player.x - position.x,
       player.z - position.z
@@ -3734,6 +4071,8 @@
       flightTimer: 0,
       attackCooldown: type.airborne ? 1.5 + Math.random() * 2.2 : 0,
       attackFired: false,
+      hangarId: Number(options.hangarId) || 0,
+      launchTimer: type.hangar ? type.productionDelay : 0,
       dodgeTimer: 0,
       dodgeCooldown: Math.random() * 0.45,
       dodgeHeading: initialHeading
@@ -3797,6 +4136,43 @@
     };
   }
 
+  function shouldSpawnHangar() {
+    return player.wave >= 4 && (player.wave - 4) % 3 === 0;
+  }
+
+  function findArmorPowerupSpawn() {
+    for (let attempt = 0; attempt < 42; attempt += 1) {
+      const position = randomSpawn(
+        ARMOR_POWERUP.SPAWN_MIN_RANGE,
+        ARMOR_POWERUP.SPAWN_MAX_RANGE
+      );
+      const clearOfRocks = !circleCollision(position.x, position.z, 0.9);
+      const clearOfEnemies = enemies.every(
+        (enemy) =>
+          distance(position, enemy) >= 3.1 + getEnemyType(enemy).scale
+      );
+      const clearOfPlayers = getCombatTargets().every(
+        (target) => distance(position, target) >= 9
+      );
+      if (clearOfRocks && clearOfEnemies && clearOfPlayers) return position;
+    }
+    return randomSpawn(
+      ARMOR_POWERUP.SPAWN_MIN_RANGE,
+      ARMOR_POWERUP.SPAWN_MAX_RANGE
+    );
+  }
+
+  function spawnArmorPowerup() {
+    armorPowerups.length = 0;
+    if (player.wave < ARMOR_POWERUP.STARTING_WAVE) return;
+    const position = findArmorPowerupSpawn();
+    armorPowerups.push({
+      id: ++armorPowerupSerial,
+      x: position.x,
+      z: position.z
+    });
+  }
+
   function spawnWave() {
     player.wave += 1;
     const squadBonus = isCoopGame()
@@ -3826,6 +4202,16 @@
       const position = findEnemySpawn(type, minimumRange, maximumRange, i);
       enemies.push(createEnemy(type, position));
     }
+    if (shouldSpawnHangar()) {
+      const hangarPosition = findEnemySpawn(
+        ENEMY_TYPES.hangar,
+        46,
+        62,
+        count + 3
+      );
+      enemies.push(createEnemy(ENEMY_TYPES.hangar, hangarPosition));
+    }
+    spawnArmorPowerup();
     waveText = `VAGUE ${String(player.wave).padStart(2, "0")}`;
     waveBanner = 2.8;
     tone(240, 0.08, "square", 0.035);
@@ -3928,7 +4314,9 @@
 
   function createRocks(seed = Math.floor(Math.random() * 0xffffffff)) {
     const random = seededRandom(seed);
+    const volcanoRandom = seededRandom((seed ^ 0x51f15e7d) >>> 0);
     rocks.length = 0;
+    volcanoes.length = 0;
     for (let i = 0; i < 24; i += 1) {
       const angle = random() * TAU;
       const radiusFromCenter = 12 + random() * 62;
@@ -3940,16 +4328,35 @@
         seed: random() * TAU
       });
     }
+
+    const volcanoAngle = volcanoRandom() * TAU;
+    const volcanoRange = 88 + volcanoRandom() * 7;
+    volcanoes.push({
+      x: Math.sin(volcanoAngle) * volcanoRange,
+      z: Math.cos(volcanoAngle) * volcanoRange,
+      radius: 9.5 + volcanoRandom() * 2.4,
+      craterRadius: 2.15 + volcanoRandom() * 0.55,
+      height: 8.2 + volcanoRandom() * 1.8,
+      rotation: volcanoRandom() * TAU,
+      profile: Array.from(
+        { length: 12 },
+        () => 0.82 + volcanoRandom() * 0.3
+      ),
+      emissionTimer: 0.08,
+      eruptionTimer: 1.8 + volcanoRandom() * 1.5
+    });
   }
 
   function resetGame() {
     enemies.length = 0;
     shells.length = 0;
     remoteWorldShells.length = 0;
+    armorPowerups.length = 0;
     particles.length = 0;
     tankDebris.length = 0;
     enemySerial = 0;
     shellSerial = 0;
+    armorPowerupSerial = 0;
     const coopSpawnX = playMode === "solo"
       ? 0
       : networkSnapshot.role === "host"
@@ -3991,12 +4398,15 @@
     appliedWorldSequence = -1;
     sharedPulseSequence = 0;
     appliedPulseSequence = 0;
+    armorPickupSequence = 0;
+    appliedArmorPickupSequence = 0;
     sharedGameOver = false;
     upgradeState.active = false;
     upgradeState.round = 0;
     localUpgradeChoice = "";
     for (const role of COOP_ROLES) {
       coopHealth[role] = 100;
+      coopArmor[role] = 0;
       coopInvulnerability[role] = 0;
       upgradeState.choices[role] = "";
       upgradeState.stats[role] = createUpgradeLevels();
@@ -4010,6 +4420,7 @@
     lastLocalPulse = { x: coopSpawnX, z: 4 };
     latestSharedPulse = null;
     recentLocalPulseVisual = null;
+    latestArmorPickup = null;
     cameraPitch = DROP_SEQUENCE.START_PITCH;
     update.nextWaveTimer = 0;
     createRocks(
@@ -5549,6 +5960,137 @@
     }
   }
 
+  function findHangarReinforcementSpawn(hangar) {
+    const hangarType = getEnemyType(hangar);
+    const launchHeading = Math.atan2(player.x - hangar.x, player.z - hangar.z);
+    const forwardX = Math.sin(launchHeading);
+    const forwardZ = Math.cos(launchHeading);
+    const rightX = Math.cos(launchHeading);
+    const rightZ = -Math.sin(launchHeading);
+    const launchDistance = hangarType.scale * 2.8;
+    const lightType = ENEMY_TYPES.light;
+
+    for (const lane of [0, -1.7, 1.7, -3.3, 3.3]) {
+      const position = {
+        x: hangar.x + forwardX * launchDistance + rightX * lane,
+        z: hangar.z + forwardZ * launchDistance + rightZ * lane
+      };
+      if (
+        Math.abs(position.x) > WORLD_LIMIT - 3 ||
+        Math.abs(position.z) > WORLD_LIMIT - 3 ||
+        circleCollision(position.x, position.z, 0.9)
+      ) continue;
+
+      const clear = enemies.every((candidate) => {
+        if (candidate === hangar || (candidate.elevation ?? 0) > 0.45) return true;
+        const clearance =
+          1.12 * lightType.scale +
+          1.12 * getEnemyType(candidate).scale +
+          0.5;
+        return Math.hypot(position.x - candidate.x, position.z - candidate.z) >= clearance;
+      });
+      if (clear) return position;
+    }
+    return null;
+  }
+
+  function updateEnemyHangars(dt) {
+    for (const hangar of enemies) {
+      const type = getEnemyType(hangar);
+      if (!type.hangar) continue;
+
+      hangar.launchTimer = Math.max(0, (hangar.launchTimer ?? 0) - dt);
+      if (hangar.launchTimer > 0) continue;
+
+      const activeReinforcements = enemies.filter(
+        (candidate) => Number(candidate.hangarId) === Number(hangar.id)
+      ).length;
+      if (activeReinforcements >= type.productionCap) {
+        hangar.launchTimer = 1.2;
+        continue;
+      }
+
+      const position = findHangarReinforcementSpawn(hangar);
+      if (!position) {
+        hangar.launchTimer = 1.2;
+        continue;
+      }
+
+      const reinforcement = createEnemy(ENEMY_TYPES.light, position, {
+        hangarId: hangar.id
+      });
+      reinforcement.reload = 0.85 + Math.random() * 0.65;
+      reinforcement.state = ENEMY_STATE.APPROACH;
+      enemies.push(reinforcement);
+      hangar.launchTimer = type.productionInterval;
+      burst(position.x, position.z, COLORS.amber, 12, 0.35);
+      tone(148, 0.12, "square", 0.02, 55);
+    }
+  }
+
+  function createArmorPickupEffects(x, z) {
+    if (!Number.isFinite(x) || !Number.isFinite(z)) return;
+    burst(x, z, COLORS.cyan, 24, 0.5);
+    particles.push({
+      kind: "shockwave",
+      x,
+      y: 0.08,
+      z,
+      vx: 0,
+      vy: 0,
+      vz: 0,
+      gravity: 0,
+      drag: 0,
+      growth: 0,
+      size: 0,
+      color: COLORS.cyan,
+      maxRadius: 3.8,
+      life: 0.42,
+      maxLife: 0.42
+    });
+    tone(520, 0.12, "square", 0.035, 180);
+    setTimeout(() => tone(760, 0.1, "square", 0.025, 90), 70);
+  }
+
+  function collectArmorPowerup(powerup, role) {
+    const index = armorPowerups.indexOf(powerup);
+    const armorRole = role === "player" ? "host" : role;
+    if (index === -1 || !COOP_ROLES.includes(armorRole)) return false;
+    armorPowerups.splice(index, 1);
+    coopArmor[armorRole] = Math.min(
+      ARMOR_POWERUP.MAX_CHARGE,
+      getRoleArmor(armorRole) + ARMOR_POWERUP.CHARGE
+    );
+    latestArmorPickup = {
+      sequence: ++armorPickupSequence,
+      x: Number(powerup.x.toFixed(3)),
+      z: Number(powerup.z.toFixed(3)),
+      role: armorRole
+    };
+    createArmorPickupEffects(powerup.x, powerup.z);
+    return true;
+  }
+
+  function updateArmorPowerups() {
+    if (!isWorldAuthority()) return;
+    const targets = getCombatTargets();
+    for (const powerup of [...armorPowerups]) {
+      const collector = targets.find(
+        (target) => {
+          const hullFront = {
+            x: target.x + Math.sin(target.heading ?? 0) * 1.45,
+            z: target.z + Math.cos(target.heading ?? 0) * 1.45
+          };
+          return (
+            Math.min(distance(target, powerup), distance(hullFront, powerup)) <=
+            ARMOR_POWERUP.PICKUP_RADIUS
+          );
+        }
+      );
+      if (collector) collectArmorPowerup(powerup, collector.role);
+    }
+  }
+
   function updateEnemies(dt) {
     const pendingDetonations = [];
     const combatTargets = getCombatTargets();
@@ -5633,6 +6175,7 @@
     for (const enemy of pendingDetonations) {
       detonateKamikaze(enemy, false);
     }
+    updateEnemyHangars(dt);
     resolveEnemyOverlaps();
     updateEnemyShields(dt);
   }
@@ -5685,21 +6228,29 @@
 
   function damagePlayer(amount, impactX, impactZ, shake = 12) {
     if (player.invulnerable > 0 || gameOver) return;
-    const armorLevel = getRoleUpgrades(getLocalRole()).armor;
-    const mitigatedDamage = Math.max(
-      1,
-      Math.round(amount * Math.pow(1 - TANK_UPGRADES.armor.damageReduction, armorLevel))
-    );
-    player.health = Math.max(0, player.health - mitigatedDamage);
+    const role = getLocalRole();
+    const mitigatedDamage = getMitigatedPlayerDamage(role, amount);
+    const absorbedDamage = Math.min(getRoleArmor(role), mitigatedDamage);
+    const remainingDamage = mitigatedDamage - absorbedDamage;
+    if (absorbedDamage > 0) {
+      coopArmor[role] = getRoleArmor(role) - absorbedDamage;
+      burst(impactX, impactZ, COLORS.cyan, 14);
+      tone(410, 0.08, "square", 0.026, 120);
+    }
+    player.health = Math.max(0, player.health - remainingDamage);
     if (isCoopGame() && networkSnapshot.role === "host") {
       coopHealth[networkSnapshot.role] = player.health;
     }
     player.invulnerable = 0.55;
-    flash = 1;
-    screenShake = Math.max(screenShake, shake);
-    if (player.health > 0) playMetalImpactSound(impactX, impactZ, 1.05);
-    burst(impactX, impactZ, COLORS.red, 18);
-    tone(92, 0.25, "sawtooth", 0.08, -45);
+    if (remainingDamage > 0) {
+      flash = 1;
+      screenShake = Math.max(screenShake, shake);
+      if (player.health > 0) playMetalImpactSound(impactX, impactZ, 1.05);
+      burst(impactX, impactZ, COLORS.red, 18);
+      tone(92, 0.25, "sawtooth", 0.08, -45);
+    } else {
+      screenShake = Math.max(screenShake, shake * 0.48);
+    }
     if (player.health <= 0) {
       if (isCoopGame() && networkSnapshot.role === "host") {
         sharedGameOver = true;
@@ -5721,16 +6272,21 @@
       coopInvulnerability[role] > 0 ||
       sharedGameOver
     ) return;
-    const armorLevel = getRoleUpgrades(role).armor;
-    const mitigatedDamage = Math.max(
-      1,
-      Math.round(amount * Math.pow(1 - TANK_UPGRADES.armor.damageReduction, armorLevel))
-    );
-    coopHealth[role] = Math.max(0, coopHealth[role] - mitigatedDamage);
+    const mitigatedDamage = getMitigatedPlayerDamage(role, amount);
+    const absorbedDamage = Math.min(getRoleArmor(role), mitigatedDamage);
+    const remainingDamage = mitigatedDamage - absorbedDamage;
+    if (absorbedDamage > 0) {
+      coopArmor[role] = getRoleArmor(role) - absorbedDamage;
+      burst(impactX, impactZ, COLORS.cyan, 14);
+      tone(410, 0.08, "square", 0.02, 120);
+    }
+    coopHealth[role] = Math.max(0, coopHealth[role] - remainingDamage);
     coopInvulnerability[role] = 0.55;
-    if (coopHealth[role] > 0) playMetalImpactSound(impactX, impactZ);
-    burst(impactX, impactZ, COLORS.red, 18);
-    tone(82, 0.18, "sawtooth", 0.025, -35);
+    if (remainingDamage > 0) {
+      if (coopHealth[role] > 0) playMetalImpactSound(impactX, impactZ);
+      burst(impactX, impactZ, COLORS.red, 18);
+      tone(82, 0.18, "sawtooth", 0.025, -35);
+    }
     if (coopHealth[role] <= 0) {
       sharedGameOver = true;
       publishSharedWorld();
@@ -6002,6 +6558,97 @@
     }
   }
 
+  function createVolcanoEmber(volcano, powerful = false) {
+    const angle = Math.random() * TAU;
+    const horizontalSpeed = powerful
+      ? 2.2 + Math.random() * 3.8
+      : 0.8 + Math.random() * 1.8;
+    const life = powerful
+      ? 2.4 + Math.random() * 1.1
+      : 1.8 + Math.random() * 0.9;
+    particles.push({
+      kind: "volcanic-ember",
+      source: "volcano",
+      x: volcano.x + (Math.random() - 0.5) * volcano.craterRadius * 0.7,
+      y: volcano.height + Math.random() * 0.35,
+      z: volcano.z + (Math.random() - 0.5) * volcano.craterRadius * 0.7,
+      vx: Math.sin(angle) * horizontalSpeed,
+      vy: powerful
+        ? 6.2 + Math.random() * 4.2
+        : 3.4 + Math.random() * 3.1,
+      vz: Math.cos(angle) * horizontalSpeed,
+      gravity: 5.6,
+      drag: 0.1,
+      growth: powerful ? 12 : 6,
+      size: powerful ? 115 : 78,
+      color: Math.random() < 0.58 ? COLORS.amber : COLORS.red,
+      life,
+      maxLife: life
+    });
+  }
+
+  function createVolcanoSmoke(volcano, powerful = false) {
+    const life = powerful
+      ? 4.2 + Math.random() * 1.6
+      : 3.1 + Math.random() * 1.2;
+    particles.push({
+      kind: "smoke",
+      source: "volcano",
+      x: volcano.x + (Math.random() - 0.5) * volcano.craterRadius,
+      y: volcano.height + 0.2,
+      z: volcano.z + (Math.random() - 0.5) * volcano.craterRadius,
+      vx: (Math.random() - 0.5) * (powerful ? 1.1 : 0.55),
+      vy: powerful ? 1.8 + Math.random() * 1.2 : 0.8 + Math.random() * 0.7,
+      vz: (Math.random() - 0.5) * (powerful ? 1.1 : 0.55),
+      gravity: -0.06,
+      drag: 0.46,
+      growth: powerful ? 92 : 68,
+      size: powerful ? 125 : 92,
+      color: "#59655d",
+      life,
+      maxLife: life
+    });
+  }
+
+  function updateVolcanoes(dt) {
+    let availableParticles = Math.max(
+      0,
+      VOLCANO_EFFECT.MAX_PARTICLES -
+        particles.filter((particle) => particle.source === "volcano").length
+    );
+    if (availableParticles <= 0) return;
+
+    for (const volcano of volcanoes) {
+      if (distance(player, volcano) > VOLCANO_EFFECT.EMISSION_DISTANCE) continue;
+      volcano.emissionTimer -= dt;
+      volcano.eruptionTimer -= dt;
+
+      if (volcano.emissionTimer <= 0 && availableParticles > 0) {
+        createVolcanoEmber(volcano);
+        availableParticles -= 1;
+        volcano.emissionTimer = 0.2 + Math.random() * 0.2;
+        if (availableParticles > 0 && Math.random() < 0.24) {
+          createVolcanoSmoke(volcano);
+          availableParticles -= 1;
+        }
+      }
+
+      if (volcano.eruptionTimer <= 0 && availableParticles > 0) {
+        const emberCount = Math.min(12, availableParticles);
+        for (let index = 0; index < emberCount; index += 1) {
+          createVolcanoEmber(volcano, true);
+        }
+        availableParticles -= emberCount;
+        const smokeCount = Math.min(3, availableParticles);
+        for (let index = 0; index < smokeCount; index += 1) {
+          createVolcanoSmoke(volcano, true);
+        }
+        availableParticles -= smokeCount;
+        volcano.eruptionTimer = 5.5 + Math.random() * 5.5;
+      }
+    }
+  }
+
   function updateParticles(dt) {
     for (let i = particles.length - 1; i >= 0; i -= 1) {
       const particle = particles[i];
@@ -6102,6 +6749,7 @@
   function update(dt) {
     if (missionPhase === MISSION_PHASE.DROP) {
       updateDropSequence(dt);
+      updateVolcanoes(dt);
       updateParticles(dt);
       updateTankDebris(dt);
       updateScreenEffects(dt);
@@ -6118,6 +6766,7 @@
       updateMotorSound(dt);
       updateRemotePlayers(dt);
       updateReplicatedWorld(dt);
+      updateVolcanoes(dt);
       updateParticles(dt);
       updateTankDebris(dt);
       updateScreenEffects(dt);
@@ -6132,8 +6781,10 @@
     updateRemotePlayers(dt);
     updateReplicatedWorld(dt);
     if (isWorldAuthority()) updateEnemies(dt);
+    updateArmorPowerups();
     updateKamikazeWarning(dt);
     updateShells(dt);
+    updateVolcanoes(dt);
     updateParticles(dt);
     updateTankDebris(dt);
     updateScreenEffects(dt);

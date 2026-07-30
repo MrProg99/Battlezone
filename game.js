@@ -18,6 +18,25 @@
   const ctx = canvas.getContext("2d");
   const network = window.BattlezoneNetwork;
   const audio = window.BattlezoneAudio;
+  const terrain = window.BattlezoneTerrain;
+  const {
+    rocks,
+    ramps,
+    volcanoes,
+    generate: generateTerrain,
+    seededRandom,
+    getRampSurface
+  } = terrain;
+  const missionDirector = window.BattlezoneMissions;
+  const {
+    createWavePlan,
+    createEnvironmentState: createMissionEnvironment,
+    getEnvironmentVisibility,
+    getBannerText: getMissionBannerText,
+    getBannerSubtitle: getMissionBannerSubtitle,
+    getEnemyTypeForWave,
+    normalizeType: normalizeMissionType
+  } = missionDirector;
   const {
     init: initAudio,
     muteMotor: muteMotorSound,
@@ -50,6 +69,7 @@
     MINELAYER,
     SCRIPTED_MISSION,
     ENVIRONMENT,
+    RAMP_SYSTEM,
     KAMIKAZE_TRIGGER_RADIUS,
     KAMIKAZE_BLAST_RADIUS,
     KAMIKAZE_BLAST_DAMAGE,
@@ -83,6 +103,10 @@
   let focal = 700;
   let horizon = 0;
   let cameraPitch = 0;
+  let cameraYawCos = 1;
+  let cameraYawSin = 0;
+  let cameraPitchCos = 1;
+  let cameraPitchSin = 0;
   let lastTime = performance.now();
   let running = false;
   let paused = false;
@@ -127,6 +151,7 @@
   let sharedGameOver = false;
   let lastLocalShot = {
     x: 0,
+    y: 0.86,
     z: 4,
     yaw: 0,
     tankId: "scout"
@@ -158,8 +183,6 @@
   const supportTurrets = [];
   const particles = [];
   const tankDebris = [];
-  const rocks = [];
-  const volcanoes = [];
   const remotePlayers = new Map();
   const remoteWorldShells = [];
   const coopHealth = {
@@ -208,6 +231,9 @@
     tankId: selectedTankId,
     x: 0,
     altitude: 0,
+    verticalVelocity: 0,
+    jumping: false,
+    activeRampId: "",
     z: 4,
     heading: 0,
     turretOffset: 0,
@@ -326,6 +352,10 @@
     Object.assign(player, {
       x: formation.x,
       z: formation.z,
+      altitude: 0,
+      verticalVelocity: 0,
+      jumping: false,
+      activeRampId: "",
       heading: formation.heading,
       turretOffset: 0,
       speed: 0,
@@ -415,6 +445,9 @@
         missionPhase: state.missionPhase ?? MISSION_PHASE.IDLE,
         shotSequence: Number(state.shotSequence) || 0,
         shotX: Number(state.shotX) || Number(state.x) || 0,
+        shotY: Number.isFinite(Number(state.shotY))
+          ? Number(state.shotY)
+          : (Number(state.altitude) || 0) + 0.86,
         shotZ: Number(state.shotZ) || Number(state.z) || 0,
         shotYaw: Number(state.shotYaw) || 0,
         shotTankId: normalizePlayerTankId(state.shotTankId),
@@ -660,6 +693,7 @@
       sequence: localStateSequence,
       shotSequence: localShotSequence,
       shotX: lastLocalShot.x,
+      shotY: lastLocalShot.y,
       shotZ: lastLocalShot.z,
       shotYaw: lastLocalShot.yaw,
       shotTankId: lastLocalShot.tankId,
@@ -830,14 +864,7 @@
     applySharedUpgradeState(world.upgrade);
     const sharedMission = world.mission;
     if (sharedMission) {
-      const sharedType = [
-        SCRIPTED_MISSION.STANDARD,
-        SCRIPTED_MISSION.DEFEND,
-        SCRIPTED_MISSION.STEALTH,
-        SCRIPTED_MISSION.DEMOLITION
-      ].includes(sharedMission.type)
-        ? sharedMission.type
-        : SCRIPTED_MISSION.STANDARD;
+      const sharedType = normalizeMissionType(sharedMission.type);
       missionState = {
         type: sharedType,
         active: Boolean(sharedMission.active),
@@ -862,7 +889,7 @@
             Math.min(1, Number(sharedEnvironment.intensity) || 0)
           )
         }
-      : createEnvironmentStateForWave(player.wave);
+      : createMissionEnvironment(player.wave);
     missionFailureReason = String(world.failureReason ?? "").slice(0, 80);
     defeatedPlayerRole = COOP_ROLES.includes(world.defeatedPlayerRole)
       ? world.defeatedPlayerRole
@@ -1000,7 +1027,7 @@
     }
 
     if (player.wave > previousWave && player.wave > 0) {
-      waveText = getWaveBannerText(player.wave);
+      waveText = getMissionBannerText(player.wave);
       waveBanner = 2.8;
       tone(240, 0.08, "square", 0.035);
     }
@@ -1397,19 +1424,24 @@
     return Math.hypot(a.x - b.x, a.z - b.z);
   }
 
-  function worldToCamera(point) {
+  function updateCameraTransform() {
     const yaw = player.heading + player.turretOffset;
+    cameraYawCos = Math.cos(yaw);
+    cameraYawSin = Math.sin(yaw);
+    cameraPitchCos = Math.cos(cameraPitch);
+    cameraPitchSin = Math.sin(cameraPitch);
+  }
+
+  function worldToCamera(point) {
     const dx = point.x - player.x;
     const dz = point.z - player.z;
-    const flatX = dx * Math.cos(yaw) - dz * Math.sin(yaw);
-    const flatZ = dx * Math.sin(yaw) + dz * Math.cos(yaw);
+    const flatX = dx * cameraYawCos - dz * cameraYawSin;
+    const flatZ = dx * cameraYawSin + dz * cameraYawCos;
     const relativeY = point.y - (1.48 + player.altitude);
-    const pitchCos = Math.cos(cameraPitch);
-    const pitchSin = Math.sin(cameraPitch);
     return {
       x: flatX,
-      y: relativeY * pitchCos + flatZ * pitchSin,
-      z: -relativeY * pitchSin + flatZ * pitchCos
+      y: relativeY * cameraPitchCos + flatZ * cameraPitchSin,
+      z: -relativeY * cameraPitchSin + flatZ * cameraPitchCos
     };
   }
 
@@ -1474,10 +1506,12 @@
   }
 
   function orientedPoint(origin, localX, localY, localZ, angle) {
+    const angleCos = Math.cos(angle);
+    const angleSin = Math.sin(angle);
     return {
-      x: origin.x + localX * Math.cos(angle) + localZ * Math.sin(angle),
+      x: origin.x + localX * angleCos + localZ * angleSin,
       y: (Number(origin.elevation) || 0) + localY,
-      z: origin.z - localX * Math.sin(angle) + localZ * Math.cos(angle)
+      z: origin.z - localX * angleSin + localZ * angleCos
     };
   }
 
@@ -1728,6 +1762,63 @@
       line3d(base[i], base[(i + 1) % base.length], COLORS.dim, 1, 0.62);
       line3d(base[i], top, COLORS.dim, 1, 0.62);
     }
+  }
+
+  function drawRamp(ramp) {
+    const halfWidth = ramp.width * 0.5;
+    const halfLength = ramp.length * 0.5;
+    const origin = { x: ramp.x, z: ramp.z, elevation: 0 };
+    const backLeft = orientedPoint(origin, -halfWidth, 0.04, -halfLength, ramp.heading);
+    const backRight = orientedPoint(origin, halfWidth, 0.04, -halfLength, ramp.heading);
+    const frontLeft = orientedPoint(origin, -halfWidth, ramp.height, halfLength, ramp.heading);
+    const frontRight = orientedPoint(origin, halfWidth, ramp.height, halfLength, ramp.heading);
+    const frontGroundLeft = orientedPoint(origin, -halfWidth, 0.04, halfLength, ramp.heading);
+    const frontGroundRight = orientedPoint(origin, halfWidth, 0.04, halfLength, ramp.heading);
+
+    line3d(backLeft, backRight, COLORS.dim, 1.8, 0.78);
+    line3d(backLeft, frontLeft, COLORS.dim, 1.8, 0.78);
+    line3d(backRight, frontRight, COLORS.dim, 1.8, 0.78);
+    line3d(frontLeft, frontRight, COLORS.dim, 2.2, 0.86);
+    line3d(frontGroundLeft, frontLeft, COLORS.dim, 1.4, 0.72);
+    line3d(frontGroundRight, frontRight, COLORS.dim, 1.4, 0.72);
+    line3d(frontGroundLeft, frontGroundRight, COLORS.dim, 1.2, 0.58);
+
+    const gridSteps = 6;
+    for (let step = 1; step < gridSteps; step += 1) {
+      const progress = step / gridSteps;
+      const localForward = -halfLength + ramp.length * progress;
+      const y = 0.04 + ramp.height * progress;
+      const left = orientedPoint(origin, -halfWidth, y, localForward, ramp.heading);
+      const right = orientedPoint(origin, halfWidth, y, localForward, ramp.heading);
+      line3d(left, right, COLORS.dim, 0.9, 0.55);
+    }
+    for (const lane of [-0.5, 0, 0.5]) {
+      const localX = halfWidth * lane;
+      const back = orientedPoint(origin, localX, 0.05, -halfLength, ramp.heading);
+      const front = orientedPoint(origin, localX, ramp.height + 0.01, halfLength, ramp.heading);
+      line3d(back, front, COLORS.dim, 1, lane === 0 ? 0.72 : 0.5);
+    }
+
+    const arrowStart = orientedPoint(origin, 0, ramp.height * 0.34, -halfLength + ramp.length * 0.34, ramp.heading);
+    const arrowTip = orientedPoint(origin, 0, ramp.height * 0.76, -halfLength + ramp.length * 0.76, ramp.heading);
+    const arrowLeft = orientedPoint(origin, -0.85, ramp.height * 0.61, -halfLength + ramp.length * 0.61, ramp.heading);
+    const arrowRight = orientedPoint(origin, 0.85, ramp.height * 0.61, -halfLength + ramp.length * 0.61, ramp.heading);
+    line3d(arrowStart, arrowTip, COLORS.dim, 2.4, 0.92);
+    line3d(arrowLeft, arrowTip, COLORS.dim, 2.4, 0.92);
+    line3d(arrowRight, arrowTip, COLORS.dim, 2.4, 0.92);
+
+    const label = project({ x: ramp.x, y: ramp.height + 0.8, z: ramp.z });
+    if (!label || label.depth > 55) return;
+    ctx.save();
+    ctx.fillStyle = COLORS.dim;
+    ctx.textAlign = "center";
+    ctx.font = "bold 9px Courier New";
+    ctx.globalAlpha = getEnvironmentVisibility(
+      environmentState,
+      distance(player, ramp)
+    );
+    ctx.fillText(`${ramp.label} // SENS UNIQUE`, label.x, label.y);
+    ctx.restore();
   }
 
   function drawVolcano(volcano) {
@@ -2588,7 +2679,7 @@
     if (!centerProjection) return;
 
     const range = distance(player, enemy);
-    const environmentVisibility = getEnvironmentVisibility(range);
+    const environmentVisibility = getEnvironmentVisibility(environmentState, range);
     if (environmentVisibility <= 0.015) return;
     const visibility = getEnemyVisibility(enemy);
     if (visibility <= 0.01) return;
@@ -2680,11 +2771,12 @@
   }
 
   function drawRemoteVectorTurbo(remote) {
+    const airborneRemote = { ...remote, elevation: remote.altitude };
     const pulse = 0.18 * Math.sin(performance.now() * 0.024);
     for (const side of [-0.62, 0.62]) {
-      const emitter = orientedPoint(remote, side, 0.34, -1.02, remote.heading);
+      const emitter = orientedPoint(airborneRemote, side, 0.34, -1.02, remote.heading);
       const tail = orientedPoint(
-        remote,
+        airborneRemote,
         side * (0.88 + pulse),
         0.2,
         -2.7 - pulse,
@@ -2696,18 +2788,19 @@
   }
 
   function drawRemotePlayer(remote) {
-    if (
-      remote.missionPhase !== MISSION_PHASE.COMBAT ||
-      remote.altitude > 0.4
-    ) return;
+    if (remote.missionPhase !== MISSION_PHASE.COMBAT) return;
 
-    const environmentVisibility = getEnvironmentVisibility(distance(player, remote));
+    const environmentVisibility = getEnvironmentVisibility(
+      environmentState,
+      distance(player, remote)
+    );
     if (environmentVisibility <= 0.015) return;
     const tank = PLAYER_TANKS[remote.tankId] ?? PLAYER_TANKS.scout;
     const scale =
       remote.tankId === "bastion" ? 1.08 : remote.tankId === "support" ? 0.96 : 0.84;
     const model = {
       ...remote,
+      elevation: remote.altitude,
       turretHeading: remote.heading + remote.turretOffset
     };
     if (remote.tankId === "scout" && remote.scoutTurboTimer > 0) {
@@ -2720,9 +2813,9 @@
       0.92
     );
     if (remote.tankId === "support") {
-      const pack = orientedPoint(remote, 0, 0, -0.92, remote.heading);
+      const pack = orientedPoint(model, 0, 0, -0.92, remote.heading);
       drawBox(
-        { x: pack.x, z: pack.z, elevation: 0.42 },
+        { x: pack.x, z: pack.z, elevation: remote.altitude + 0.42 },
         [0.58, 0.42, 0.46],
         remote.heading,
         COLORS.cyan,
@@ -2730,7 +2823,11 @@
       );
     }
 
-    const center = project({ x: remote.x, y: 1.05 * scale, z: remote.z });
+    const center = project({
+      x: remote.x,
+      y: remote.altitude + 1.05 * scale,
+      z: remote.z
+    });
     if (!center || center.depth > 52) return;
     const range = Math.round(distance(player, remote) * 10);
     const labelY = center.y - Math.min(82, 48 / center.depth * 18);
@@ -4395,7 +4492,11 @@
     ctx.fillText(waveText, width / 2, height * 0.23 + 43);
     ctx.font = "9px Courier New";
     ctx.fillStyle = COLORS.amber;
-    ctx.fillText(getWaveBannerSubtitle(), width / 2, height * 0.23 + 61);
+    ctx.fillText(
+      getMissionBannerSubtitle(missionState, environmentState),
+      width / 2,
+      height * 0.23 + 61
+    );
     ctx.restore();
   }
 
@@ -4579,6 +4680,7 @@
   }
 
   function draw() {
+    updateCameraTransform();
     const shakeX = screenShake > 0 ? (Math.random() - 0.5) * screenShake : 0;
     const shakeY = screenShake > 0 ? (Math.random() - 0.5) * screenShake : 0;
 
@@ -4597,6 +4699,10 @@
       ...volcanoes.map((volcano) => ({
         depth: distance(player, volcano),
         draw: () => drawVolcano(volcano)
+      })),
+      ...ramps.map((ramp) => ({
+        depth: distance(player, ramp),
+        draw: () => drawRamp(ramp)
       })),
       ...rocks.map((rock) => ({
         depth: distance(player, rock),
@@ -4647,7 +4753,10 @@
     ];
     renderables.sort((a, b) => b.depth - a.depth);
     for (const item of renderables) {
-      renderEnvironmentVisibility = getEnvironmentVisibility(item.depth);
+      renderEnvironmentVisibility = getEnvironmentVisibility(
+        environmentState,
+        item.depth
+      );
       if (renderEnvironmentVisibility > 0.015) item.draw();
     }
     renderEnvironmentVisibility = 1;
@@ -4692,144 +4801,6 @@
       x: Math.max(-WORLD_LIMIT + 5, Math.min(WORLD_LIMIT - 5, player.x + Math.sin(angle) * range)),
       z: Math.max(-WORLD_LIMIT + 5, Math.min(WORLD_LIMIT - 5, player.z + Math.cos(angle) * range))
     };
-  }
-
-  function getScriptedMissionType(wave) {
-    if (wave < SCRIPTED_MISSION.STARTING_WAVE) {
-      return SCRIPTED_MISSION.STANDARD;
-    }
-    const missionIndex = (wave - SCRIPTED_MISSION.STARTING_WAVE) % 3;
-    if (missionIndex === 0) return SCRIPTED_MISSION.DEFEND;
-    if (missionIndex === 1) return SCRIPTED_MISSION.STEALTH;
-    return SCRIPTED_MISSION.DEMOLITION;
-  }
-
-  function createEnvironmentStateForWave(wave) {
-    const fogCycle =
-      wave >= ENVIRONMENT.FOG_STARTING_WAVE &&
-      (wave - ENVIRONMENT.FOG_STARTING_WAVE) % 3 === 0;
-    if (fogCycle) {
-      const cycle = Math.floor((wave - ENVIRONMENT.FOG_STARTING_WAVE) / 3);
-      return {
-        type: ENVIRONMENT.FOG,
-        intensity: Math.min(1, 0.78 + cycle * 0.05)
-      };
-    }
-
-    const rainCycle =
-      wave >= ENVIRONMENT.RAIN_STARTING_WAVE &&
-      (wave - ENVIRONMENT.RAIN_STARTING_WAVE) % 3 === 0;
-    if (rainCycle) {
-      const cycle = Math.floor((wave - ENVIRONMENT.RAIN_STARTING_WAVE) / 3);
-      return {
-        type: ENVIRONMENT.RAIN,
-        intensity: Math.min(0.92, 0.68 + cycle * 0.04)
-      };
-    }
-    return { type: ENVIRONMENT.CLEAR, intensity: 0 };
-  }
-
-  function getEnvironmentVisibility(range) {
-    const intensity = Math.max(0, Math.min(1, environmentState.intensity));
-    if (environmentState.type === ENVIRONMENT.RAIN) {
-      const progress = Math.max(
-        0,
-        Math.min(
-          1,
-          (range - ENVIRONMENT.RAIN_NEAR) /
-            (ENVIRONMENT.RAIN_FAR - ENVIRONMENT.RAIN_NEAR)
-        )
-      );
-      const smooth = progress * progress * (3 - 2 * progress);
-      return 1 - smooth * 0.24 * intensity;
-    }
-    if (environmentState.type !== ENVIRONMENT.FOG) return 1;
-    const near = ENVIRONMENT.FOG_NEAR + (1 - intensity) * 5;
-    const far = ENVIRONMENT.FOG_FAR + (1 - intensity) * 8;
-    const progress = Math.max(0, Math.min(1, (range - near) / (far - near)));
-    const smooth = progress * progress * (3 - 2 * progress);
-    return 1 - smooth;
-  }
-
-  function createScriptedMissionState(wave) {
-    const type = getScriptedMissionType(wave);
-    const cycle = Math.max(0, Math.floor((wave - SCRIPTED_MISSION.STARTING_WAVE) / 3));
-    const extraCoopPlayers = type === SCRIPTED_MISSION.DEFEND && isCoopGame()
-      ? Math.max(0, Math.min(MAX_COOP_PLAYERS, networkSnapshot.playerCount || 1) - 1)
-      : 0;
-    const defenseHealth =
-      SCRIPTED_MISSION.DEFENSE_HEALTH +
-      cycle * 10 +
-      extraCoopPlayers * SCRIPTED_MISSION.DEFENSE_HEALTH_PER_EXTRA_PLAYER;
-    return {
-      type,
-      active: type !== SCRIPTED_MISSION.STANDARD,
-      completed: false,
-      x: type === SCRIPTED_MISSION.DEFEND ? SCRIPTED_MISSION.DEFENSE_X : 0,
-      z: type === SCRIPTED_MISSION.DEFEND ? SCRIPTED_MISSION.DEFENSE_Z : 0,
-      health: type === SCRIPTED_MISSION.DEFEND ? defenseHealth : 0,
-      maxHealth: type === SCRIPTED_MISSION.DEFEND ? defenseHealth : 0,
-      shieldTimer: type === SCRIPTED_MISSION.DEFEND
-        ? SCRIPTED_MISSION.DEFENSE_SHIELD_TIME
-        : 0,
-      timer: type === SCRIPTED_MISSION.DEMOLITION
-        ? SCRIPTED_MISSION.DEMOLITION_TIME
-        : 0,
-      targetEnemyId: 0
-    };
-  }
-
-  function getWaveBannerText(wave) {
-    if (wave === 5) return "VAGUE 05 // BEHEMOTH";
-    const prefix = `V${String(wave).padStart(2, "0")}`;
-    const type = getScriptedMissionType(wave);
-    if (type === SCRIPTED_MISSION.DEFEND) return `${prefix} // DÉFENDRE LE RELAIS`;
-    if (type === SCRIPTED_MISSION.STEALTH) return `${prefix} // CHASSE FANTÔME`;
-    if (type === SCRIPTED_MISSION.DEMOLITION) return `${prefix} // FRAPPE CHRONOMÉTRÉE`;
-    return `VAGUE ${String(wave).padStart(2, "0")}`;
-  }
-
-  function getWaveBannerSubtitle() {
-    let subtitle = "SIGNATURES HOSTILES DÉTECTÉES";
-    if (missionState.type === SCRIPTED_MISSION.DEFEND) {
-      subtitle = "EMPÊCHER LA DESTRUCTION DU RELAIS";
-    } else if (missionState.type === SCRIPTED_MISSION.STEALTH) {
-      subtitle = "SIGNATURES FANTÔMES // VISIBILITÉ RÉDUITE";
-    } else if (missionState.type === SCRIPTED_MISSION.DEMOLITION) {
-      subtitle = "DÉTRUIRE LE CENTRE AVANT LA FIN DU DÉLAI";
-    }
-    if (environmentState.type === ENVIRONMENT.FOG) {
-      return `BROUILLARD DENSE // ${subtitle}`;
-    }
-    if (environmentState.type === ENVIRONMENT.RAIN) {
-      return `PLUIE BATTANTE // ${subtitle}`;
-    }
-    return subtitle;
-  }
-
-  function getWaveEnemyType(index, count) {
-    if (getScriptedMissionType(player.wave) === SCRIPTED_MISSION.STEALTH) {
-      return ENEMY_TYPES.ghost;
-    }
-    if (player.wave === 5 && index === count - 1) return ENEMY_TYPES.behemoth;
-    if (index === count - 1) return ENEMY_TYPES.artillery;
-    if (player.wave >= 3 && index === count - 2) {
-      return ENEMY_TYPES.guardian;
-    }
-    if (player.wave >= 4 && index === count - 3) {
-      return ENEMY_TYPES.ghost;
-    }
-    if (player.wave >= 5 && index === count - 4) {
-      return ENEMY_TYPES.kamikaze;
-    }
-    if (player.wave >= 6 && index === count - 5) {
-      return ENEMY_TYPES.drone;
-    }
-    if (player.wave >= MINELAYER.STARTING_WAVE && index === 3) {
-      return ENEMY_TYPES.minelayer;
-    }
-    if (index % 3 === 1) return ENEMY_TYPES.light;
-    return ENEMY_TYPES.assault;
   }
 
   function createEnemy(type, position, options = {}) {
@@ -4969,16 +4940,6 @@
     };
   }
 
-  function shouldSpawnHangar() {
-    const missionType = getScriptedMissionType(player.wave);
-    if (missionType === SCRIPTED_MISSION.STEALTH) return false;
-    return (
-      (player.wave >= 4 && player.wave < SCRIPTED_MISSION.STARTING_WAVE &&
-        (player.wave - 4) % 3 === 0) ||
-      (missionType === SCRIPTED_MISSION.DEFEND && player.wave >= 9)
-    );
-  }
-
   function findArmorPowerupSpawn() {
     for (let attempt = 0; attempt < 42; attempt += 1) {
       const position = randomSpawn(
@@ -5015,8 +4976,12 @@
   function spawnWave() {
     player.wave += 1;
     resetLocalPlayerForWave();
-    missionState = createScriptedMissionState(player.wave);
-    environmentState = createEnvironmentStateForWave(player.wave);
+    const wavePlan = createWavePlan(player.wave, {
+      coop: isCoopGame(),
+      playerCount: networkSnapshot.playerCount
+    });
+    missionState = wavePlan.mission;
+    environmentState = wavePlan.environment;
     missionFailureReason = "";
     for (const role of COOP_ROLES) {
       coopInvulnerability[role] = Math.max(coopInvulnerability[role], 1.2);
@@ -5026,7 +4991,7 @@
       : 0;
     const count = Math.min(3 + player.wave + squadBonus, 9 + squadBonus);
     for (let i = 0; i < count; i += 1) {
-      const type = getWaveEnemyType(i, count);
+      const type = getEnemyTypeForWave(player.wave, i, count);
       const position = findEnemySpawn(type, i);
       enemies.push(createEnemy(type, position));
     }
@@ -5036,12 +5001,12 @@
       missionState.targetEnemyId = building.id;
       enemies.push(building);
     }
-    if (shouldSpawnHangar()) {
+    if (wavePlan.spawnHangar) {
       const hangarPosition = findEnemySpawn(ENEMY_TYPES.hangar, count + 3);
       enemies.push(createEnemy(ENEMY_TYPES.hangar, hangarPosition));
     }
     spawnArmorPowerup();
-    waveText = getWaveBannerText(player.wave);
+    waveText = wavePlan.bannerText;
     waveBanner = 2.8;
     tone(240, 0.08, "square", 0.035);
     setTimeout(() => tone(360, 0.12, "square", 0.03), 110);
@@ -5130,65 +5095,6 @@
     updateUpgradePhase();
   }
 
-  function seededRandom(seed) {
-    let value = seed >>> 0;
-    return () => {
-      value += 0x6d2b79f5;
-      let mixed = value;
-      mixed = Math.imul(mixed ^ mixed >>> 15, mixed | 1);
-      mixed ^= mixed + Math.imul(mixed ^ mixed >>> 7, mixed | 61);
-      return ((mixed ^ mixed >>> 14) >>> 0) / 4294967296;
-    };
-  }
-
-  function createRocks(seed = Math.floor(Math.random() * 0xffffffff)) {
-    const random = seededRandom(seed);
-    const volcanoRandom = seededRandom((seed ^ 0x51f15e7d) >>> 0);
-    rocks.length = 0;
-    volcanoes.length = 0;
-    const formationPoints = COOP_ROLES.map((role) => ({
-      x: PLAYER_FORMATION_X,
-      z: PLAYER_FORMATION_Z[role]
-    }));
-    for (let attempt = 0; rocks.length < 28 && attempt < 180; attempt += 1) {
-      const angle = random() * TAU;
-      const radiusFromCenter = 12 + random() * (WORLD_LIMIT - 18);
-      const rock = {
-        x: Math.sin(angle) * radiusFromCenter,
-        z: Math.cos(angle) * radiusFromCenter,
-        radius: 0.8 + random() * 1.9,
-        height: 1.2 + random() * 3.2,
-        seed: random() * TAU
-      };
-      const blocksFormation = formationPoints.some(
-        (formation) => distance(formation, rock) < rock.radius + 7
-      );
-      const blocksDefenseRelay =
-        distance(
-          { x: SCRIPTED_MISSION.DEFENSE_X, z: SCRIPTED_MISSION.DEFENSE_Z },
-          rock
-        ) < rock.radius + 6;
-      if (!blocksFormation && !blocksDefenseRelay) rocks.push(rock);
-    }
-
-    const volcanoAngle = volcanoRandom() * TAU;
-    const volcanoRange = WORLD_LIMIT + 12 + volcanoRandom() * 8;
-    volcanoes.push({
-      x: Math.sin(volcanoAngle) * volcanoRange,
-      z: Math.cos(volcanoAngle) * volcanoRange,
-      radius: 9.5 + volcanoRandom() * 2.4,
-      craterRadius: 2.15 + volcanoRandom() * 0.55,
-      height: 8.2 + volcanoRandom() * 1.8,
-      rotation: volcanoRandom() * TAU,
-      profile: Array.from(
-        { length: 12 },
-        () => 0.82 + volcanoRandom() * 0.3
-      ),
-      emissionTimer: 0.08,
-      eruptionTimer: 1.8 + volcanoRandom() * 1.5
-    });
-  }
-
   function resetGame() {
     enemies.length = 0;
     shells.length = 0;
@@ -5205,14 +5111,18 @@
     supportTurretSerial = 0;
     missionFailureReason = "";
     defeatedPlayerRole = "";
-    missionState = createScriptedMissionState(0);
-    environmentState = createEnvironmentStateForWave(0);
+    const initialWavePlan = createWavePlan(0);
+    missionState = initialWavePlan.mission;
+    environmentState = initialWavePlan.environment;
     renderEnvironmentVisibility = 1;
     const initialFormation = getPlayerFormationPosition();
     Object.assign(player, {
       tankId: selectedTankId,
       x: initialFormation.x,
       altitude: DROP_SEQUENCE.START_HEIGHT,
+      verticalVelocity: 0,
+      jumping: false,
+      activeRampId: "",
       z: initialFormation.z,
       heading: initialFormation.heading,
       turretOffset: 0,
@@ -5271,6 +5181,7 @@
     }
     lastLocalShot = {
       x: initialFormation.x,
+      y: 0.86,
       z: initialFormation.z,
       yaw: initialFormation.heading,
       tankId: selectedTankId
@@ -5292,7 +5203,7 @@
     latestArmorPickup = null;
     cameraPitch = DROP_SEQUENCE.START_PITCH;
     update.nextWaveTimer = 0;
-    createRocks(
+    generateTerrain(
       playMode === "solo"
         ? Math.floor(Math.random() * 0xffffffff)
         : Number(networkSnapshot.meta?.worldSeed) || 1
@@ -5331,6 +5242,9 @@
     running = false;
     missionPhase = MISSION_PHASE.IDLE;
     player.altitude = 0;
+    player.verticalVelocity = 0;
+    player.jumping = false;
+    player.activeRampId = "";
     cameraPitch = 0;
     remotePlayers.clear();
     if (!keepCoopRoom && playMode !== "solo" && networkSnapshot.connected) {
@@ -5496,7 +5410,7 @@
       particles.push({
         kind: "smoke",
         x: originX + Math.cos(yaw) * lateralOffset,
-        y: 0.82 + Math.random() * 0.16,
+        y: player.altitude + 0.82 + Math.random() * 0.16,
         z: originZ - Math.sin(yaw) * lateralOffset,
         vx: Math.sin(smokeHeading) * speed,
         vy: 0.18 + Math.random() * 0.5,
@@ -5576,7 +5490,7 @@
       id: ++shellSerial,
       kind: "direct",
       x: player.x + Math.sin(yaw) * 1.8,
-      y: 0.86,
+      y: player.altitude + 0.86,
       z: player.z + Math.cos(yaw) * 1.8,
       vx: Math.sin(yaw) * tank.shellSpeed,
       vz: Math.cos(yaw) * tank.shellSpeed,
@@ -5587,6 +5501,7 @@
     localShotSequence += 1;
     lastLocalShot = {
       x: player.x,
+      y: player.altitude + 0.86,
       z: player.z,
       yaw,
       tankId: player.tankId
@@ -5695,7 +5610,7 @@
       id: ++shellSerial,
       kind: "direct",
       x: shot.shotX + Math.sin(shot.shotYaw) * 1.8,
-      y: 0.86,
+      y: Number(shot.shotY) || 0.86,
       z: shot.shotZ + Math.cos(shot.shotYaw) * 1.8,
       vx: Math.sin(shot.shotYaw) * tank.shellSpeed,
       vz: Math.cos(shot.shotYaw) * tank.shellSpeed,
@@ -6226,6 +6141,98 @@
     };
   }
 
+  function enforceOneWayRampEntry(startX, startZ, movement) {
+    if (player.jumping) return;
+    const surface = getRampSurface(movement.x, movement.z);
+    if (!surface || player.activeRampId === surface.ramp.id) return;
+
+    const forwardVelocity =
+      player.speed * Math.cos(normalizeAngle(player.heading - surface.ramp.heading));
+    const alignment = forwardVelocity / Math.max(0.001, Math.abs(player.speed));
+    const validLowEntry =
+      surface.progress <= RAMP_SYSTEM.ENTRY_PROGRESS &&
+      forwardVelocity >= RAMP_SYSTEM.ENTRY_MIN_SPEED &&
+      alignment >= RAMP_SYSTEM.ENTRY_ALIGNMENT;
+    if (validLowEntry) {
+      player.activeRampId = surface.ramp.id;
+      return;
+    }
+
+    movement.x = startX;
+    movement.z = startZ;
+    movement.collided = true;
+    movement.collisionSeverity = 1;
+  }
+
+  function updatePlayerRampMotion(dt) {
+    if (player.jumping) {
+      player.altitude += player.verticalVelocity * dt;
+      player.verticalVelocity -= RAMP_SYSTEM.GRAVITY * dt;
+      const jumpPitch = Math.max(
+        -0.09,
+        Math.min(0.11, player.verticalVelocity * 0.014)
+      );
+      cameraPitch += (jumpPitch - cameraPitch) * Math.min(1, dt * 5.5);
+
+      const landingSurface = getRampSurface(player.x, player.z);
+      const groundHeight = landingSurface?.height ?? 0;
+      if (player.verticalVelocity < 0 && player.altitude <= groundHeight) {
+        const landingSpeed = Math.abs(player.verticalVelocity);
+        player.altitude = groundHeight;
+        player.verticalVelocity = 0;
+        player.jumping = false;
+        player.activeRampId = landingSurface?.ramp.id ?? "";
+        landingPulse = Math.max(landingPulse, 0.58);
+        screenShake = Math.max(screenShake, 5 + landingSpeed * 0.55);
+        createLandingDust();
+        tone(62, 0.18, "sawtooth", 0.045, -24);
+        tone(148, 0.07, "square", 0.022, -65);
+      }
+      return;
+    }
+
+    const surface = getRampSurface(player.x, player.z);
+    if (!surface) {
+      player.altitude = 0;
+      player.verticalVelocity = 0;
+      player.activeRampId = "";
+      cameraPitch += (0 - cameraPitch) * Math.min(1, dt * 7);
+      return;
+    }
+
+    if (player.activeRampId !== surface.ramp.id) {
+      player.altitude = 0;
+      player.verticalVelocity = 0;
+      cameraPitch += (0 - cameraPitch) * Math.min(1, dt * 7);
+      return;
+    }
+
+    player.altitude = surface.height;
+    const forwardVelocity =
+      player.speed * Math.cos(normalizeAngle(player.heading - surface.ramp.heading));
+    const slopePitch =
+      Math.atan2(surface.ramp.height, surface.ramp.length) *
+      Math.sign(forwardVelocity || 1) *
+      0.5;
+    cameraPitch += (slopePitch - cameraPitch) * Math.min(1, dt * 8);
+
+    if (
+      surface.progress < RAMP_SYSTEM.LAUNCH_PROGRESS ||
+      forwardVelocity < RAMP_SYSTEM.MIN_LAUNCH_SPEED
+    ) return;
+
+    player.jumping = true;
+    player.activeRampId = "";
+    player.altitude = Math.max(player.altitude, surface.ramp.height);
+    player.verticalVelocity =
+      RAMP_SYSTEM.BASE_LAUNCH_VELOCITY +
+      forwardVelocity * RAMP_SYSTEM.SPEED_TO_LAUNCH_VELOCITY;
+    burst(player.x, player.z, COLORS.dim, 9, Math.max(0.3, player.altitude * 0.35));
+    screenShake = Math.max(screenShake, 4);
+    tone(180, 0.1, "sawtooth", 0.035, 180);
+    tone(420, 0.06, "square", 0.018, 130);
+  }
+
   function updatePlayer(dt) {
     const tank = getPlayerTank();
     const turboActive = tank.id === "scout" && player.scoutTurboTimer > 0;
@@ -6257,14 +6264,18 @@
       !deployingSupport && (keys.has("KeyD") || keys.has("ArrowRight"));
     const targetSpeed = forward ? forwardSpeed : backward ? -reverseSpeed : 0;
     const response = targetSpeed === 0 ? tank.coastResponse : acceleration;
-    if (!deployingSupport) {
-      player.speed += (targetSpeed - player.speed) * Math.min(1, dt * response);
+    if (!deployingSupport && (!player.jumping || forward || backward)) {
+      const control = player.jumping ? RAMP_SYSTEM.AIR_CONTROL : 1;
+      player.speed +=
+        (targetSpeed - player.speed) * Math.min(1, dt * response * control);
     }
 
     if (left || right) {
       const speedRatio = Math.min(1, Math.abs(player.speed) / forwardSpeed);
       const speedPenalty = speedRatio * tank.forwardSpeed * 0.025;
-      const turnMultiplier = turboActive ? VECTOR_TURBO.TURN_MULTIPLIER : 1;
+      const turnMultiplier =
+        (turboActive ? VECTOR_TURBO.TURN_MULTIPLIER : 1) *
+        (player.jumping ? RAMP_SYSTEM.AIR_CONTROL : 1);
       const turn =
         (right ? 1 : -1) * dt * (tank.turnRate - speedPenalty) * turnMultiplier;
       player.heading = normalizeAngle(player.heading + turn);
@@ -6288,13 +6299,17 @@
     }
     turretWasAligned = turretAligned;
 
-    const movement = resolveSlidingMovement(
-      player.x,
-      player.z,
-      Math.sin(player.heading) * player.speed * dt,
-      Math.cos(player.heading) * player.speed * dt,
-      1.05
-    );
+    const moveX = Math.sin(player.heading) * player.speed * dt;
+    const moveZ = Math.cos(player.heading) * player.speed * dt;
+    const movement = player.jumping
+      ? {
+          x: Math.max(-WORLD_LIMIT + 1.05, Math.min(WORLD_LIMIT - 1.05, player.x + moveX)),
+          z: Math.max(-WORLD_LIMIT + 1.05, Math.min(WORLD_LIMIT - 1.05, player.z + moveZ)),
+          collided: false,
+          collisionSeverity: 0
+        }
+      : resolveSlidingMovement(player.x, player.z, moveX, moveZ, 1.05);
+    enforceOneWayRampEntry(player.x, player.z, movement);
     player.x = movement.x;
     player.z = movement.z;
     if (movement.collided) {
@@ -6302,6 +6317,7 @@
         0.985 - 0.235 * movement.collisionSeverity ** 2;
       player.speed *= surfaceFriction;
     }
+    updatePlayerRampMotion(dt);
 
     if (turboActive) {
       player.scoutTurboTrailTimer -= dt;
@@ -6834,6 +6850,7 @@
       z: player.z,
       heading: player.heading,
       speed: player.speed,
+      altitude: player.altitude,
       health: player.health
     }];
     if (isCoopGame() && networkSnapshot.role === "host") {
@@ -6849,6 +6866,7 @@
           z: remote.z,
           heading: remote.heading,
           speed: 0,
+          altitude: remote.altitude,
           health: remoteHealth
         });
       }
@@ -6861,6 +6879,7 @@
         z: turret.z,
         heading: turret.heading,
         speed: 0,
+        altitude: 0,
         health: turret.health
       });
     }
@@ -6875,6 +6894,7 @@
         z: missionState.z,
         heading: 0,
         speed: 0,
+        altitude: 0,
         health: missionState.health
       });
     }
@@ -7284,6 +7304,7 @@
     createMineExplosionEffects(mine);
 
     for (const target of getCombatTargets()) {
+      if ((target.altitude ?? 0) > 0.65) continue;
       const blastDistance = distance(mine, target);
       if (blastDistance > MINELAYER.BLAST_RADIUS) continue;
       const falloff = 1 - blastDistance / MINELAYER.BLAST_RADIUS;
@@ -7316,7 +7337,9 @@
       }
 
       const triggered = getCombatTargets().some(
-        (target) => distance(mine, target) <= MINELAYER.TRIGGER_RADIUS
+        (target) =>
+          (target.altitude ?? 0) <= 0.45 &&
+          distance(mine, target) <= MINELAYER.TRIGGER_RADIUS
       );
       if (triggered) detonateMine(mine);
     }
@@ -8086,7 +8109,14 @@
         const target =
           getTargetByRole(shell.targetRole) ??
           getCombatTargets()[0];
-        if (target && Math.hypot(shell.x - target.x, shell.z - target.z) < 1.2) {
+        const verticalGap = target
+          ? Math.abs((shell.y ?? 0.86) - ((target.altitude ?? 0) + 0.86))
+          : Infinity;
+        if (
+          target &&
+          Math.hypot(shell.x - target.x, shell.z - target.z) < 1.2 &&
+          verticalGap < 1.05
+        ) {
           shells.splice(i, 1);
           damageCombatTarget(
             target.role,
@@ -8259,6 +8289,9 @@
 
   function finishDropSequence() {
     player.altitude = 0;
+    player.verticalVelocity = 0;
+    player.jumping = false;
+    player.activeRampId = "";
     cameraPitch = 0;
     missionPhase = MISSION_PHASE.COMBAT;
     landingPulse = 1;
@@ -8482,7 +8515,7 @@
   window.addEventListener("resize", resize);
 
   resize();
-  createRocks();
+  generateTerrain();
   network?.subscribe(handleNetworkSnapshot);
   updateLobbyUi();
   requestAnimationFrame(loop);

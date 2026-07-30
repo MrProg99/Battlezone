@@ -489,6 +489,7 @@
       sequence: state.sequence,
       shotSequence: state.shotSequence,
       shotX: Number(state.shotX.toFixed(3)),
+      shotY: Number((Number(state.shotY) || 0.86).toFixed(3)),
       shotZ: Number(state.shotZ.toFixed(3)),
       shotYaw: Number(state.shotYaw.toFixed(4)),
       shotTankId: normalizePlayerTankId(state.shotTankId),

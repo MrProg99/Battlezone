@@ -84,6 +84,8 @@ puis interpolent le monde partagé reçu depuis `battlezone/rooms/<code>/world`.
 ## Organisation du JavaScript
 
 - `config.js` : paramètres de jeu, châssis, ennemis, missions et constantes de rendu;
+- `terrain.js` : génération déterministe des rochers, rampes et volcans, surfaces et règles de placement;
+- `missions.js` : catalogue des missions, rotation, environnement et planification des vagues;
 - `audio.js` : chargement des sons, moteur, spatialisation et tonalités synthétiques;
 - `ui.js` : éléments HTML et rendu des écrans de salon, classement, amélioration et fin;
 - `multiplayer.js` : connexion Firebase, salons et transport des états;
@@ -106,11 +108,13 @@ avec l’ouverture directe de `index.html`, sans installation ni étape de compi
 - `E` avec le Soutien : déployer un powerup d'armure pour l'escouade
 - `P` : pause
 - `R` : recommencer après une défaite
+- Rampe : repérer sa flèche sur le terrain, entrer par le côté bas et accélérer avec `W`; la hauteur du saut dépend de la vitesse
 
 ## Contenu du prototype
 
 - Vue cockpit en perspective 3D
 - Terrain agrandi avec zones de départ opposées et formation Coop espacée
+- Rampe vectorielle procédurale : position et orientation variables, sens unique, saut physique et synchronisation Coop par la graine du monde
 - Cadre de cockpit blindé avec radar et jauges intégrés
 - Lune vectorielle avec cratères, croissant et parallaxe dans le ciel
 - Largage aérien du tank avec altimètre et impact au sol

@@ -12,7 +12,8 @@
   const MISSION_ROTATION = Object.freeze([
     SCRIPTED_MISSION.DEFEND,
     SCRIPTED_MISSION.STEALTH,
-    SCRIPTED_MISSION.DEMOLITION
+    SCRIPTED_MISSION.DEMOLITION,
+    SCRIPTED_MISSION.TRAIN
   ]);
 
   function createDefenseState({ cycle, coop, playerCount }) {
@@ -36,6 +37,10 @@
 
   function createDemolitionState() {
     return { timer: SCRIPTED_MISSION.DEMOLITION_TIME };
+  }
+
+  function createTrainState() {
+    return { targetEnemyId: 0 };
   }
 
   const MISSION_CATALOG = Object.freeze({
@@ -85,6 +90,15 @@
       active: true,
       environment: null,
       createState: createDemolitionState
+    }),
+    [SCRIPTED_MISSION.TRAIN]: Object.freeze({
+      id: SCRIPTED_MISSION.TRAIN,
+      title: "INTERCEPTION DU CONVOI",
+      subtitle: "DÉTRUIRE LE TRAIN AVANT SON EXTRACTION",
+      active: true,
+      environment: null,
+      createState: createTrainState,
+      allowHangar: false
     })
   });
 

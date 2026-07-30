@@ -35,7 +35,8 @@
     getBannerText: getMissionBannerText,
     getBannerSubtitle: getMissionBannerSubtitle,
     getEnemyTypeForWave,
-    normalizeType: normalizeMissionType
+    normalizeType: normalizeMissionType,
+    getMissionCycle
   } = missionDirector;
   const {
     init: initAudio,
@@ -68,6 +69,7 @@
     GUARDIAN_RADAR_JAM_RADIUS,
     MINELAYER,
     SCRIPTED_MISSION,
+    TRAIN_MISSION,
     ENVIRONMENT,
     RAMP_SYSTEM,
     KAMIKAZE_TRIGGER_RADIUS,
@@ -1038,7 +1040,9 @@
       if (!incomingEnemyIds.has(Number(enemies[i].id))) {
         if (missionPhase === MISSION_PHASE.COMBAT) {
           const removedType = getEnemyType(enemies[i]);
-          if (removedType.kamikaze) {
+          if (removedType.train) {
+            createArmoredTrainExplosionEffects(enemies[i]);
+          } else if (removedType.kamikaze) {
             createKamikazeExplosionEffects(enemies[i]);
           } else {
             createTankDebris(enemies[i]);
@@ -1066,6 +1070,9 @@
         z: Number(snapshot.z),
         heading: Number(snapshot.heading),
         turretHeading: Number(snapshot.turretHeading),
+        rearTurretHeading: Number.isFinite(Number(snapshot.rearTurretHeading))
+          ? Number(snapshot.rearTurretHeading)
+          : normalizeAngle(Number(snapshot.turretHeading) + Math.PI),
         health: Number(snapshot.health),
         maxHealth: Number(snapshot.maxHealth),
         hitFlash: Number(snapshot.hitFlash) || 0,
@@ -1181,6 +1188,15 @@
         enemy.turretHeading +
         normalizeAngle(target.turretHeading - enemy.turretHeading) * blend
       );
+      if (Number.isFinite(target.rearTurretHeading)) {
+        enemy.rearTurretHeading = normalizeAngle(
+          (enemy.rearTurretHeading ?? target.rearTurretHeading) +
+          normalizeAngle(
+            target.rearTurretHeading -
+            (enemy.rearTurretHeading ?? target.rearTurretHeading)
+          ) * blend
+        );
+      }
       enemy.health = target.health;
       enemy.maxHealth = target.maxHealth;
       enemy.hitFlash = Math.max(0, enemy.hitFlash - dt);
@@ -1239,6 +1255,9 @@
         z: Number(enemy.z.toFixed(3)),
         heading: Number(enemy.heading.toFixed(4)),
         turretHeading: Number(enemy.turretHeading.toFixed(4)),
+        rearTurretHeading: Number(
+          (enemy.rearTurretHeading ?? enemy.turretHeading).toFixed(4)
+        ),
         health: enemy.health,
         maxHealth: enemy.maxHealth,
         hitFlash: Number(enemy.hitFlash.toFixed(3)),
@@ -1573,6 +1592,61 @@
       ctx.moveTo(0, horizon);
       ctx.lineTo(width, horizon);
       ctx.stroke();
+    }
+  }
+
+  function drawTrainRail() {
+    if (missionState.type !== SCRIPTED_MISSION.TRAIN) return;
+    const railZ = TRAIN_MISSION.RAIL_Z;
+    const railStart = Math.min(TRAIN_MISSION.START_X, TRAIN_MISSION.END_X);
+    const railEnd = Math.max(TRAIN_MISSION.START_X, TRAIN_MISSION.END_X);
+    const gauge = TRAIN_MISSION.TRACK_GAUGE;
+
+    for (const offset of [-gauge, gauge]) {
+      line3d(
+        { x: railStart - 4, y: 0.055, z: railZ + offset },
+        { x: railEnd + 4, y: 0.055, z: railZ + offset },
+        COLORS.soft,
+        2.1,
+        0.82
+      );
+    }
+    for (let x = railStart - 2; x <= railEnd + 2; x += 3.2) {
+      line3d(
+        { x, y: 0.035, z: railZ - gauge - 0.75 },
+        { x, y: 0.035, z: railZ + gauge + 0.75 },
+        COLORS.dim,
+        1.55,
+        0.72
+      );
+    }
+
+    const extractionX = TRAIN_MISSION.END_X;
+    for (const side of [-1, 1]) {
+      line3d(
+        { x: extractionX, y: 0.04, z: railZ + side * 3.5 },
+        { x: extractionX, y: 4.8, z: railZ + side * 3.5 },
+        COLORS.amber,
+        2,
+        0.9
+      );
+    }
+    line3d(
+      { x: extractionX, y: 4.8, z: railZ - 3.5 },
+      { x: extractionX, y: 4.8, z: railZ + 3.5 },
+      COLORS.amber,
+      2,
+      0.9
+    );
+    const label = project({ x: extractionX, y: 5.3, z: railZ });
+    if (label) {
+      ctx.save();
+      ctx.fillStyle = COLORS.amber;
+      ctx.textAlign = "center";
+      ctx.font = "900 9px Courier New";
+      ctx.globalAlpha = 0.86;
+      ctx.fillText("ZONE D’EXTRACTION", label.x, label.y);
+      ctx.restore();
     }
   }
 
@@ -2461,6 +2535,57 @@
     }
   }
 
+  function drawArmoredTrain(enemy, color, fade) {
+    const heading = enemy.heading;
+    const elevatedOrigin = (localZ, elevation) => {
+      const point = orientedPoint(enemy, 0, elevation, localZ, heading);
+      return { x: point.x, z: point.z, elevation: point.y };
+    };
+
+    const locomotive = elevatedOrigin(0.45, 0.08);
+    const rearWagon = elevatedOrigin(-4.55, 0.08);
+    const engineDeck = elevatedOrigin(1.25, 1.27);
+    const rearDeck = elevatedOrigin(-4.55, 1.08);
+    drawBox(locomotive, [2.15, 1.22, 3.35], heading, color, fade);
+    drawBox(rearWagon, [2.02, 1.02, 1.65], heading, color, fade);
+    drawBox(engineDeck, [1.45, 0.55, 1.55], heading, color, fade * 0.96);
+    drawBox(rearDeck, [1.5, 0.42, 1.1], heading, color, fade * 0.96);
+
+    for (const axleZ of [-5.45, -3.72, -1.8, 0.35, 2.45]) {
+      const left = orientedPoint(enemy, -2.38, 0.3, axleZ, heading);
+      const right = orientedPoint(enemy, 2.38, 0.3, axleZ, heading);
+      drawTankEdge(left, right, COLORS.dim, fade * 0.9, 2.3);
+    }
+
+    const drawTrainCannon = (mountOffset, turretHeading) => {
+      const mount = orientedPoint(enemy, 0, 1.42, mountOffset, heading);
+      const mountOrigin = { x: mount.x, z: mount.z, elevation: mount.y };
+      drawBox(mountOrigin, [0.82, 0.46, 0.88], turretHeading, color, fade);
+      const barrelStart = {
+        x: mount.x + Math.sin(turretHeading) * 0.45,
+        y: mount.y + 0.34,
+        z: mount.z + Math.cos(turretHeading) * 0.45
+      };
+      const barrelEnd = {
+        x: mount.x + Math.sin(turretHeading) * 2.55,
+        y: mount.y + 0.34,
+        z: mount.z + Math.cos(turretHeading) * 2.55
+      };
+      drawTankEdge(barrelStart, barrelEnd, color, fade, 2.05);
+    };
+    drawTrainCannon(TRAIN_MISSION.FRONT_CANNON_OFFSET, enemy.turretHeading);
+    drawTrainCannon(
+      TRAIN_MISSION.REAR_CANNON_OFFSET,
+      enemy.rearTurretHeading ?? normalizeAngle(heading + Math.PI)
+    );
+
+    const nose = orientedPoint(enemy, 0, 0.08, 4.05, heading);
+    const noseLeft = orientedPoint(enemy, -2.65, 0.08, 3.55, heading);
+    const noseRight = orientedPoint(enemy, 2.65, 0.08, 3.55, heading);
+    drawTankEdge(nose, noseLeft, color, fade, 1.7);
+    drawTankEdge(nose, noseRight, color, fade, 1.7);
+  }
+
   function drawGuardianAura(enemy, fade) {
     const pulse =
       GUARDIAN_SHIELD_RADIUS +
@@ -2669,6 +2794,8 @@
         (enemy.elevation ?? 0) +
         (type.id === "artillery"
           ? 1
+          : type.train
+            ? 1.5
           : type.hangar || type.objectiveBuilding
             ? 1.3 * type.scale
           : type.id === "guardian"
@@ -2701,7 +2828,9 @@
         ? color
         : modulateLineColor(color, getEnemyLinePulse(enemy, type));
 
-    if (type.id === "guardian") {
+    if (type.train) {
+      drawArmoredTrain(enemy, modelColor, fade);
+    } else if (type.id === "guardian") {
       drawGuardianAura(enemy, fade);
       drawGuardianEnemy(enemy, type, modelColor, fade);
     } else if (type.kamikaze) {
@@ -2717,7 +2846,8 @@
     }
     drawEnemyShield(enemy, fade);
 
-    const labelRange = type.boss ? 100 : type.priority ? 60 : 42;
+    const majorTarget = type.boss || type.train;
+    const labelRange = majorTarget ? 100 : type.priority ? 60 : 42;
     if (centerProjection.depth >= labelRange) return;
 
     const labelY =
@@ -2738,7 +2868,9 @@
       const priorityColor = bossEnraged ? COLORS.red : COLORS.amber;
       ctx.fillStyle = priorityColor;
       ctx.fillText(
-        type.boss
+        type.train
+          ? "▲ OBJECTIF MOBILE ▲"
+          : type.boss
           ? bossEnraged
             ? "▲ BOSS // ENRAGÉ ▲"
             : "▲ BOSS DE VAGUE 5 ▲"
@@ -2748,17 +2880,17 @@
       );
       ctx.strokeStyle = priorityColor;
       ctx.strokeRect(
-        centerProjection.x - (type.boss ? 42 : 28) - pulse,
-        centerProjection.y - (type.boss ? 30 : 20) - pulse,
-        (type.boss ? 84 : 56) + pulse * 2,
-        (type.boss ? 60 : 40) + pulse * 2
+        centerProjection.x - (majorTarget ? 42 : 28) - pulse,
+        centerProjection.y - (majorTarget ? 30 : 20) - pulse,
+        (majorTarget ? 84 : 56) + pulse * 2,
+        (majorTarget ? 60 : 40) + pulse * 2
       );
     }
 
-    const barWidth = type.boss
+    const barWidth = majorTarget
       ? Math.min(150, 780 / centerProjection.depth)
       : Math.min(42, 220 / centerProjection.depth);
-    const barHeight = type.boss ? 5 : 3;
+    const barHeight = majorTarget ? 5 : 3;
     ctx.strokeStyle = color;
     ctx.strokeRect(centerProjection.x - barWidth / 2, labelY + 5, barWidth, barHeight);
     ctx.fillRect(
@@ -4538,6 +4670,7 @@
     let color = COLORS.cyan;
     let label = "";
     let progress = null;
+    let routeProgress = null;
 
     if (missionState.type === SCRIPTED_MISSION.DEFEND) {
       progress = missionState.maxHealth > 0
@@ -4566,14 +4699,41 @@
       if (building && building.maxHealth > 0) {
         progress = Math.max(0, Math.min(1, building.health / building.maxHealth));
       }
+    } else if (missionState.type === SCRIPTED_MISSION.TRAIN) {
+      const train = enemies.find(
+        (enemy) => Number(enemy.id) === Number(missionState.targetEnemyId)
+      );
+      color = missionState.completed ? COLORS.green : COLORS.amber;
+      if (!train) {
+        label = "TRAIN DÉTRUIT // ÉLIMINER LES ESCORTES";
+        progress = 0;
+        routeProgress = 0;
+      } else {
+        const totalRoute = TRAIN_MISSION.START_X - TRAIN_MISSION.END_X;
+        routeProgress = Math.max(
+          0,
+          Math.min(1, (TRAIN_MISSION.START_X - train.x) / totalRoute)
+        );
+        progress = train.maxHealth > 0
+          ? Math.max(0, Math.min(1, train.health / train.maxHealth))
+          : 0;
+        const remainingMeters = Math.max(
+          0,
+          Math.ceil((train.x - TRAIN_MISSION.END_X) * 10)
+        );
+        if (routeProgress >= 0.78) color = COLORS.red;
+        label = `INTERCEPTION // TRAIN ${Math.ceil(train.health)}/${train.maxHealth} // SORTIE ${remainingMeters}m`;
+      }
     }
 
     if (!label) return;
+    const panelHeight =
+      progress === null ? 22 : routeProgress === null ? 31 : 41;
     ctx.save();
     ctx.fillStyle = "rgba(2, 8, 5, 0.88)";
-    ctx.fillRect(barX - 7, barY - 17, barWidth + 14, progress === null ? 22 : 31);
+    ctx.fillRect(barX - 7, barY - 17, barWidth + 14, panelHeight);
     ctx.strokeStyle = color;
-    ctx.strokeRect(barX - 7, barY - 17, barWidth + 14, progress === null ? 22 : 31);
+    ctx.strokeRect(barX - 7, barY - 17, barWidth + 14, panelHeight);
     ctx.fillStyle = color;
     ctx.textAlign = "center";
     ctx.font = "900 10px Courier New";
@@ -4583,6 +4743,12 @@
       ctx.fillRect(barX, barY + 3, barWidth, 6);
       ctx.fillStyle = color;
       ctx.fillRect(barX, barY + 3, barWidth * progress, 6);
+    }
+    if (routeProgress !== null) {
+      ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
+      ctx.fillRect(barX, barY + 13, barWidth, 5);
+      ctx.fillStyle = routeProgress >= 0.78 ? COLORS.red : COLORS.amber;
+      ctx.fillRect(barX, barY + 13, barWidth * routeProgress, 5);
     }
     ctx.restore();
   }
@@ -4694,6 +4860,7 @@
       drawMountains();
     }
     drawGround();
+    drawTrainRail();
 
     const renderables = [
       ...volcanoes.map((volcano) => ({
@@ -4804,10 +4971,9 @@
   }
 
   function createEnemy(type, position, options = {}) {
-    const initialHeading = Math.atan2(
-      player.x - position.x,
-      player.z - position.z
-    );
+    const initialHeading = Number.isFinite(options.heading)
+      ? Number(options.heading)
+      : Math.atan2(player.x - position.x, player.z - position.z);
     const assaultBonus = type.id === "assault" && player.wave >= 4 ? 1 : 0;
     const artilleryBonus = type.id === "artillery" && player.wave >= 6 ? 1 : 0;
     const bossCoopBonus = type.boss && isCoopGame()
@@ -4819,13 +4985,22 @@
     const objectiveCoopBonus = type.objectiveBuilding && isCoopGame()
       ? Math.max(0, networkSnapshot.playerCount - 1) * 4
       : 0;
+    const trainWaveBonus = type.train
+      ? getMissionCycle(player.wave) * TRAIN_MISSION.HEALTH_PER_CYCLE
+      : 0;
+    const trainCoopBonus = type.train && isCoopGame()
+      ? Math.max(0, networkSnapshot.playerCount - 1) *
+        TRAIN_MISSION.HEALTH_PER_EXTRA_PLAYER
+      : 0;
     const health =
       type.health +
       assaultBonus +
       artilleryBonus +
       bossCoopBonus +
       objectiveWaveBonus +
-      objectiveCoopBonus;
+      objectiveCoopBonus +
+      trainWaveBonus +
+      trainCoopBonus;
 
     return {
       id: ++enemySerial,
@@ -4834,6 +5009,7 @@
       z: position.z,
       heading: initialHeading,
       turretHeading: initialHeading,
+      rearTurretHeading: normalizeAngle(initialHeading + Math.PI),
       speed:
         type.speed +
         Math.random() * type.speedVariance +
@@ -4841,9 +5017,12 @@
       health,
       maxHealth: health,
       reload:
-        type.id === "artillery"
+        type.train
+          ? 1.15
+          : type.id === "artillery"
           ? 3 + Math.random() * 1.2
           : 1.2 + Math.random() * 2,
+      rearReload: type.train ? 1.9 : 0,
       preferredRange:
         type.preferredRangeMin +
         Math.random() * (type.preferredRangeMax - type.preferredRangeMin),
@@ -4871,6 +5050,7 @@
       flightTimer: 0,
       attackCooldown: type.airborne ? 1.5 + Math.random() * 2.2 : 0,
       attackFired: false,
+      trainEscort: Boolean(options.trainEscort),
       hangarId: Number(options.hangarId) || 0,
       launchTimer: type.hangar ? type.productionDelay : 0,
       mineDropCooldown: type.minelayer ? 1.5 + Math.random() * 1.2 : 0,
@@ -4940,6 +5120,46 @@
     };
   }
 
+  function findTrainEscortSpawn(type, index) {
+    const side = index % 2 === 0 ? -1 : 1;
+    const column = Math.floor(index / 2);
+    for (let attempt = 0; attempt < 32; attempt += 1) {
+      const position = {
+        x: Math.max(
+          -WORLD_LIMIT + 6,
+          TRAIN_MISSION.START_X - 11 - column * 7 + (Math.random() - 0.5) * 5
+        ),
+        z: Math.max(
+          -WORLD_LIMIT + 6,
+          Math.min(
+            WORLD_LIMIT - 6,
+            TRAIN_MISSION.RAIL_Z +
+              side * (8.5 + (column % 3) * 2.4) +
+              (Math.random() - 0.5) * 3
+          )
+        )
+      };
+      if (isEnemySpawnClear(position, type)) return position;
+    }
+    return findEnemySpawn(type, index);
+  }
+
+  function spawnArmoredTrain() {
+    const train = createEnemy(
+      ENEMY_TYPES.armoredTrain,
+      { x: TRAIN_MISSION.START_X, z: TRAIN_MISSION.RAIL_Z },
+      { heading: TRAIN_MISSION.HEADING }
+    );
+    train.heading = TRAIN_MISSION.HEADING;
+    train.turretHeading = TRAIN_MISSION.HEADING;
+    train.rearTurretHeading = normalizeAngle(TRAIN_MISSION.HEADING + Math.PI);
+    enemies.push(train);
+    missionState.targetEnemyId = train.id;
+    missionState.x = train.x;
+    missionState.z = train.z;
+    return train;
+  }
+
   function findArmorPowerupSpawn() {
     for (let attempt = 0; attempt < 42; attempt += 1) {
       const position = randomSpawn(
@@ -4990,10 +5210,14 @@
       ? Math.max(0, networkSnapshot.playerCount - 2) * 2
       : 0;
     const count = Math.min(3 + player.wave + squadBonus, 9 + squadBonus);
+    const trainMission = missionState.type === SCRIPTED_MISSION.TRAIN;
+    if (trainMission) spawnArmoredTrain();
     for (let i = 0; i < count; i += 1) {
       const type = getEnemyTypeForWave(player.wave, i, count);
-      const position = findEnemySpawn(type, i);
-      enemies.push(createEnemy(type, position));
+      const position = trainMission
+        ? findTrainEscortSpawn(type, i)
+        : findEnemySpawn(type, i);
+      enemies.push(createEnemy(type, position, { trainEscort: trainMission }));
     }
     if (missionState.type === SCRIPTED_MISSION.DEMOLITION) {
       const buildingPosition = findEnemySpawn(ENEMY_TYPES.commandCenter, count + 5);
@@ -7163,6 +7387,7 @@
       }
       if (getEnemyType(candidate).id === "artillery") score -= 8;
       if (getEnemyType(candidate).objectiveBuilding) score -= 12;
+      if (getEnemyType(candidate).train) score -= 18;
       if (score < bestScore) {
         best = candidate;
         bestScore = score;
@@ -7477,15 +7702,138 @@
     }
   }
 
+  function getTrainCannonMount(train, offset) {
+    return orientedPoint(train, 0, 1.42, offset, train.heading);
+  }
+
+  function chooseTrainCannonTarget(mount, combatTargets, avoidedRole = "") {
+    let chosen = null;
+    let chosenScore = Infinity;
+    for (const target of combatTargets) {
+      const range = distance(mount, target);
+      if (range > TRAIN_MISSION.FIRE_RANGE) continue;
+      const score = range + (target.role === avoidedRole ? 10 : 0);
+      if (score >= chosenScore) continue;
+      chosen = target;
+      chosenScore = score;
+    }
+    return chosen;
+  }
+
+  function fireTrainCannon(train, mount, turretHeading, target) {
+    const range = distance(mount, target);
+    const accuracy = Math.min(0.14, 0.045 + range * 0.0013);
+    const shotYaw = turretHeading + (Math.random() - 0.5) * accuracy;
+    const muzzle = {
+      x: mount.x + Math.sin(shotYaw) * 2.5,
+      y: mount.y + 0.34,
+      z: mount.z + Math.cos(shotYaw) * 2.5
+    };
+    shells.push({
+      id: ++shellSerial,
+      kind: "direct",
+      x: muzzle.x,
+      y: muzzle.y,
+      z: muzzle.z,
+      vx: Math.sin(shotYaw) * TRAIN_MISSION.SHELL_SPEED,
+      vz: Math.cos(shotYaw) * TRAIN_MISSION.SHELL_SPEED,
+      life: TRAIN_MISSION.SHELL_LIFETIME,
+      damage: TRAIN_MISSION.SHELL_DAMAGE,
+      owner: "enemy",
+      targetRole: target.role
+    });
+    burst(muzzle.x, muzzle.z, COLORS.amber, 7, muzzle.y);
+    tone(74, 0.11, "sawtooth", 0.034, -28);
+  }
+
+  function updateTrainCannon(
+    train,
+    mountOffset,
+    headingProperty,
+    reloadProperty,
+    target,
+    dt
+  ) {
+    train[reloadProperty] = Math.max(0, (train[reloadProperty] ?? 0) - dt);
+    if (!target) return;
+    const mount = getTrainCannonMount(train, mountOffset);
+    const targetHeading = Math.atan2(target.x - mount.x, target.z - mount.z);
+    train[headingProperty] = turnTowardAngle(
+      train[headingProperty] ?? train.heading,
+      targetHeading,
+      TRAIN_MISSION.TURRET_TURN_RATE * dt
+    );
+    const range = distance(mount, target);
+    const facingError = Math.abs(
+      normalizeAngle(targetHeading - train[headingProperty])
+    );
+    if (
+      train[reloadProperty] > 0 ||
+      range >= TRAIN_MISSION.FIRE_RANGE ||
+      facingError > TRAIN_MISSION.FIRE_ALIGNMENT
+    ) return;
+    fireTrainCannon(train, mount, train[headingProperty], target);
+    train[reloadProperty] =
+      TRAIN_MISSION.RELOAD_BASE + Math.random() * TRAIN_MISSION.RELOAD_JITTER;
+  }
+
+  function updateArmoredTrain(train, combatTargets, dt) {
+    train.heading = TRAIN_MISSION.HEADING;
+    train.x += Math.sin(train.heading) * TRAIN_MISSION.SPEED * dt;
+    train.z = TRAIN_MISSION.RAIL_Z;
+    missionState.x = train.x;
+    missionState.z = train.z;
+    missionState.health = Math.max(0, train.health);
+    missionState.maxHealth = train.maxHealth;
+
+    const frontMount = getTrainCannonMount(
+      train,
+      TRAIN_MISSION.FRONT_CANNON_OFFSET
+    );
+    const frontTarget = chooseTrainCannonTarget(frontMount, combatTargets);
+    const rearMount = getTrainCannonMount(
+      train,
+      TRAIN_MISSION.REAR_CANNON_OFFSET
+    );
+    const rearTarget = chooseTrainCannonTarget(
+      rearMount,
+      combatTargets,
+      frontTarget?.role ?? ""
+    );
+    updateTrainCannon(
+      train,
+      TRAIN_MISSION.FRONT_CANNON_OFFSET,
+      "turretHeading",
+      "reload",
+      frontTarget,
+      dt
+    );
+    updateTrainCannon(
+      train,
+      TRAIN_MISSION.REAR_CANNON_OFFSET,
+      "rearTurretHeading",
+      "rearReload",
+      rearTarget,
+      dt
+    );
+  }
+
   function updateEnemies(dt) {
     const pendingDetonations = [];
     const combatTargets = getCombatTargets();
     const targetLoads = new Map(
       combatTargets.map((target) => [target.role, 0])
     );
+    const convoyTrain = enemies.find((enemy) => getEnemyType(enemy).train);
     for (const enemy of enemies) {
       enemy.revealTimer = Math.max(0, (enemy.revealTimer ?? 0) - dt);
       enemy.revealFlash = Math.max(0, (enemy.revealFlash ?? 0) - dt);
+      enemy.hitFlash = Math.max(0, enemy.hitFlash - dt);
+      const type = getEnemyType(enemy);
+      if (type.train) {
+        updateArmoredTrain(enemy, combatTargets, dt);
+        continue;
+      }
       const targetChoice = chooseEnemyTarget(
         enemy,
         combatTargets,
@@ -7498,10 +7846,8 @@
         target.x - enemy.x,
         target.z - enemy.z
       );
-      const type = getEnemyType(enemy);
       const previousX = enemy.x;
       const previousZ = enemy.z;
-      enemy.hitFlash = Math.max(0, enemy.hitFlash - dt);
 
       if (!type.static && !type.kamikaze && !type.airborne && !type.boss) {
         updateEnemyDodge(enemy, type, dt);
@@ -7540,7 +7886,11 @@
 
       const guardianAnchor =
         type.id === "guardian" ? chooseGuardianAnchor(enemy) : null;
-      const movementTarget = guardianAnchor ?? target;
+      const trainAnchor = enemy.trainEscort ? convoyTrain : null;
+      const distantFromTrain =
+        trainAnchor && distance(enemy, trainAnchor) > 18;
+      const movementTarget = guardianAnchor ??
+        (distantFromTrain ? trainAnchor : target);
       const movementRange = distance(enemy, movementTarget);
       const movementHeading = Math.atan2(
         movementTarget.x - enemy.x,
@@ -7656,6 +8006,28 @@
       missionState.shieldTimer = Math.max(0, missionState.shieldTimer - dt);
       if (missionState.health <= 0) {
         failScriptedMission("LE RELAIS A ÉTÉ DÉTRUIT");
+      }
+      return;
+    }
+    if (missionState.type === SCRIPTED_MISSION.TRAIN) {
+      const train = enemies.find(
+        (enemy) => Number(enemy.id) === Number(missionState.targetEnemyId)
+      );
+      if (!train) {
+        if (!missionState.completed) {
+          missionState.completed = true;
+          missionState.health = 0;
+          tone(520, 0.13, "square", 0.042, 170);
+          setTimeout(() => tone(760, 0.16, "square", 0.035, 110), 95);
+        }
+        return;
+      }
+      missionState.x = train.x;
+      missionState.z = train.z;
+      missionState.health = Math.max(0, train.health);
+      missionState.maxHealth = train.maxHealth;
+      if (train.x <= TRAIN_MISSION.END_X) {
+        failScriptedMission("LE CONVOI ENNEMI S’EST ÉCHAPPÉ");
       }
       return;
     }
@@ -7824,6 +8196,19 @@
     tone(118, 0.18, "square", 0.045, -75);
   }
 
+  function createArmoredTrainExplosionEffects(enemy) {
+    for (const offset of [-5.2, -2.4, 0.6, 3.1]) {
+      const blastPoint = orientedPoint(enemy, 0, 0.4, offset, enemy.heading);
+      burst(blastPoint.x, blastPoint.z, COLORS.red, 34, blastPoint.y);
+      burst(blastPoint.x, blastPoint.z, COLORS.amber, 22, blastPoint.y + 0.2);
+      createBlastSmoke(blastPoint.x, blastPoint.z);
+    }
+    screenShake = Math.max(screenShake, 19);
+    playTankExplosionSound(enemy.x, enemy.z, 1.4);
+    tone(38, 0.62, "sawtooth", 0.12, -8);
+    tone(92, 0.28, "square", 0.055, -55);
+  }
+
   function destroyEnemy(enemy, creditedRole = getLocalRole()) {
     const enemyIndex = enemies.indexOf(enemy);
     if (enemyIndex === -1) return false;
@@ -7833,7 +8218,11 @@
     enemies.splice(enemyIndex, 1);
     if (creditedRole) awardEnemyDestruction(enemy, creditedRole);
     if (type.id === "guardian") clearGuardianShields(enemy.id);
-    createTankDebris(enemy);
+    if (type.train) {
+      createArmoredTrainExplosionEffects(enemy);
+    } else {
+      createTankDebris(enemy);
+    }
     burst(
       enemy.x,
       enemy.z,
@@ -7841,9 +8230,9 @@
       32,
       0.4 + (enemy.elevation ?? 0)
     );
-    playTankExplosionSound(enemy.x, enemy.z);
-    screenShake = Math.max(screenShake, 9);
-    tone(58, 0.34, "sawtooth", 0.08, -20);
+    if (!type.train) playTankExplosionSound(enemy.x, enemy.z);
+    screenShake = Math.max(screenShake, type.train ? 19 : 9);
+    if (!type.train) tone(58, 0.34, "sawtooth", 0.08, -20);
     return true;
   }
 
@@ -8012,6 +8401,18 @@
 
   function shellHitsEnemy(shell, enemy) {
     const type = getEnemyType(enemy);
+    if (type.train) {
+      const offsetX = shell.x - enemy.x;
+      const offsetZ = shell.z - enemy.z;
+      const headingSin = Math.sin(enemy.heading);
+      const headingCos = Math.cos(enemy.heading);
+      const localSide = offsetX * headingCos - offsetZ * headingSin;
+      const localForward = offsetX * headingSin + offsetZ * headingCos;
+      return (
+        Math.abs(localSide) < TRAIN_MISSION.BODY_HALF_WIDTH + 0.3 &&
+        Math.abs(localForward) < TRAIN_MISSION.BODY_HALF_LENGTH
+      );
+    }
     const hitRadius = 1.45 * type.hitRadius;
     if (Math.hypot(shell.x - enemy.x, shell.z - enemy.z) >= hitRadius) {
       return false;

@@ -8,6 +8,7 @@
     PLAYER_FORMATION_X,
     PLAYER_FORMATION_Z,
     SCRIPTED_MISSION,
+    TRAIN_MISSION,
     RAMP_SYSTEM
   } = window.BattlezoneConfig;
 
@@ -123,7 +124,18 @@
         { x: SCRIPTED_MISSION.DEFENSE_X, z: SCRIPTED_MISSION.DEFENSE_Z },
         6
       );
-      if (insideWorld && clearOfFormation && clearOfDefenseRelay) return ramp;
+      const railHalfWidth = TRAIN_MISSION.TRACK_CLEARANCE + ramp.width * 0.5;
+      const minimumPathZ = Math.min(lowApproach.z, ramp.z, landingEnd.z);
+      const maximumPathZ = Math.max(lowApproach.z, ramp.z, landingEnd.z);
+      const clearOfTrainRail =
+        maximumPathZ < TRAIN_MISSION.RAIL_Z - railHalfWidth ||
+        minimumPathZ > TRAIN_MISSION.RAIL_Z + railHalfWidth;
+      if (
+        insideWorld &&
+        clearOfFormation &&
+        clearOfDefenseRelay &&
+        clearOfTrainRail
+      ) return ramp;
     }
 
     return {
@@ -158,6 +170,9 @@
         { x: SCRIPTED_MISSION.DEFENSE_X, z: SCRIPTED_MISSION.DEFENSE_Z },
         rock
       ) < rock.radius + 6;
+    const blocksTrainRail =
+      Math.abs(rock.z - TRAIN_MISSION.RAIL_Z) <
+      TRAIN_MISSION.TRACK_CLEARANCE + rock.radius;
     const blocksRamp = ramps.some((ramp) => {
       const local = getRampCoordinates(ramp, rock.x, rock.z);
       const sideClearance = ramp.width * 0.5 + rock.radius + 2.5;
@@ -170,7 +185,9 @@
         local.forward < landingClearance
       );
     });
-    return blocksFormation || blocksDefenseRelay || blocksRamp ? null : rock;
+    return blocksFormation || blocksDefenseRelay || blocksTrainRail || blocksRamp
+      ? null
+      : rock;
   }
 
   function createVolcano(volcanoRandom) {

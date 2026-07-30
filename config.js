@@ -61,6 +61,7 @@
     DEFEND: "defend",
     STEALTH: "stealth",
     DEMOLITION: "demolition",
+    TRAIN: "train",
     STARTING_WAVE: 6,
     DEFENSE_X: -18,
     DEFENSE_Z: 0,
@@ -69,6 +70,30 @@
     DEFENSE_SHIELD_TIME: 2,
     DEFENSE_TARGET_PRIORITY: -8,
     DEMOLITION_TIME: 55
+  });
+  const TRAIN_MISSION = Object.freeze({
+    RAIL_Z: 22,
+    START_X: 82,
+    END_X: -82,
+    HEADING: -Math.PI / 2,
+    SPEED: 2.1,
+    BASE_HEALTH: 28,
+    HEALTH_PER_CYCLE: 4,
+    HEALTH_PER_EXTRA_PLAYER: 8,
+    BODY_HALF_LENGTH: 6.4,
+    BODY_HALF_WIDTH: 2.35,
+    FRONT_CANNON_OFFSET: 2.75,
+    REAR_CANNON_OFFSET: -4.65,
+    TURRET_TURN_RATE: 1.35,
+    FIRE_RANGE: 58,
+    FIRE_ALIGNMENT: 0.13,
+    RELOAD_BASE: 2.55,
+    RELOAD_JITTER: 0.65,
+    SHELL_SPEED: 23,
+    SHELL_LIFETIME: 3.1,
+    SHELL_DAMAGE: 12,
+    TRACK_GAUGE: 1.55,
+    TRACK_CLEARANCE: 5.5
   });
   const ENVIRONMENT = Object.freeze({
     CLEAR: "clear",
@@ -440,6 +465,32 @@
       priority: true,
       support: true,
       objectiveBuilding: true
+    }),
+    armoredTrain: Object.freeze({
+      id: "armoredTrain",
+      label: "TRAIN BLINDÉ",
+      code: "TR",
+      health: TRAIN_MISSION.BASE_HEALTH,
+      speed: TRAIN_MISSION.SPEED,
+      speedVariance: 0,
+      preferredRangeMin: 0,
+      preferredRangeMax: 0,
+      scale: 2.3,
+      hitRadius: 3.5,
+      turretTurnRate: TRAIN_MISSION.TURRET_TURN_RATE,
+      fireRange: TRAIN_MISSION.FIRE_RANGE,
+      fireAlignment: TRAIN_MISSION.FIRE_ALIGNMENT,
+      reloadBase: TRAIN_MISSION.RELOAD_BASE,
+      reloadMin: TRAIN_MISSION.RELOAD_BASE,
+      reloadJitter: TRAIN_MISSION.RELOAD_JITTER,
+      shellSpeed: TRAIN_MISSION.SHELL_SPEED,
+      shellLifetime: TRAIN_MISSION.SHELL_LIFETIME,
+      shellDamage: TRAIN_MISSION.SHELL_DAMAGE,
+      score: 1800,
+      static: true,
+      priority: true,
+      support: true,
+      train: true
     })
   });
   const MISSION_PHASE = Object.freeze({
@@ -584,6 +635,7 @@
     GUARDIAN_RADAR_JAM_RADIUS,
     MINELAYER,
     SCRIPTED_MISSION,
+    TRAIN_MISSION,
     ENVIRONMENT,
     RAMP_SYSTEM,
     KAMIKAZE_TRIGGER_RADIUS,

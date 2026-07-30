@@ -61,6 +61,7 @@ Realtime Database.
 
 Ce premier jalon synchronise :
 
+- un identifiant unique par mission (protocole v3) qui rejette les états, les tirs et les mondes d'une partie précédente;
 - le salon privé de deux à trois joueurs et son code d’invitation;
 - la présence et la déconnexion;
 - le nom des pilotes et leur identification au-dessus des chars alliés;
@@ -79,6 +80,17 @@ Ce premier jalon synchronise :
 L’hôte est l’unique autorité de la simulation de combat. Les invités contrôlent
 leur char localement pour conserver une conduite fluide, transmettent leurs tirs,
 puis interpolent le monde partagé reçu depuis `battlezone/rooms/<code>/world`.
+
+## Organisation du JavaScript
+
+- `config.js` : paramètres de jeu, châssis, ennemis, missions et constantes de rendu;
+- `audio.js` : chargement des sons, moteur, spatialisation et tonalités synthétiques;
+- `ui.js` : éléments HTML et rendu des écrans de salon, classement, amélioration et fin;
+- `multiplayer.js` : connexion Firebase, salons et transport des états;
+- `game.js` : orchestration de la simulation, du combat et du rendu vectoriel.
+
+Ces fichiers utilisent des API globales `Battlezone*` afin de rester compatibles
+avec l’ouverture directe de `index.html`, sans installation ni étape de compilation.
 
 ## Commandes
 

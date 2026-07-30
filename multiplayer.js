@@ -2,6 +2,7 @@
   "use strict";
 
   const FIREBASE_VERSION = "12.16.0";
+  const ROOM_VERSION = 3;
   const MIN_PLAYERS = 2;
   const MAX_PLAYERS = 3;
   const GUEST_ROLES = ["guest", "guest2"];
@@ -149,6 +150,11 @@
     return values[0] || 1;
   }
 
+  function normalizeMissionId(value) {
+    const missionId = Math.floor(Number(value) || 0);
+    return missionId >= 1 && missionId <= 0xffffffff ? missionId : 0;
+  }
+
   function makePlayer(role, tankId, playerName) {
     tankId = normalizePlayerTankId(tankId);
     return {
@@ -161,6 +167,7 @@
       connected: true,
       joinedAt: Date.now(),
       state: {
+        missionId: 0,
         tankId,
         x: PLAYER_FORMATION_X,
         z: PLAYER_FORMATION_Z[role] ?? 0,
@@ -302,7 +309,8 @@
           hostId: session.uid,
           status: "lobby",
           maxPlayers: MAX_PLAYERS,
-          version: 2,
+          version: ROOM_VERSION,
+          missionId: 0,
           worldSeed: makeWorldSeed(),
           createdAt: Date.now()
         },
@@ -341,7 +349,7 @@
     if (room.meta.status !== "lobby") {
       throw new Error("La mission de ce salon a déjà commencé.");
     }
-    if (room.meta.version !== 2) {
+    if (room.meta.version !== ROOM_VERSION) {
       throw new Error("Ce salon utilise une autre version de Battlezone.");
     }
     const existingRole = GUEST_ROLES.find(
@@ -393,9 +401,11 @@
     }
     const { ref, update, serverTimestamp } = firebase.databaseModule;
     discardPendingMissionState();
+    const missionId = makeWorldSeed();
     await update(ref(database, `${ROOMS_PATH}/${session.roomCode}`), {
       "meta/status": "playing",
       "meta/maxPlayers": MAX_PLAYERS,
+      "meta/missionId": missionId,
       "meta/worldSeed": makeWorldSeed(),
       "meta/startedAt": serverTimestamp(),
       "meta/defeatedPlayerRole": null,
@@ -443,7 +453,9 @@
       !pendingState ||
       !playerRef ||
       !firebase ||
-      session.meta?.status !== "playing"
+      session.meta?.status !== "playing" ||
+      normalizeMissionId(pendingState.missionId) !==
+        normalizeMissionId(session.meta?.missionId)
     ) {
       pendingState = null;
       return;
@@ -462,7 +474,10 @@
 
   function sendPlayerState(state) {
     if (!playerRef || session.meta?.status !== "playing") return;
+    const missionId = normalizeMissionId(state.missionId);
+    if (!missionId || missionId !== normalizeMissionId(session.meta?.missionId)) return;
     pendingState = {
+      missionId,
       tankId: normalizePlayerTankId(state.tankId),
       x: Number(state.x.toFixed(3)),
       z: Number(state.z.toFixed(3)),
@@ -529,7 +544,9 @@
       !firebase ||
       !session.roomCode ||
       session.role !== "host" ||
-      session.meta?.status !== "playing"
+      session.meta?.status !== "playing" ||
+      normalizeMissionId(pendingWorldState.missionId) !==
+        normalizeMissionId(session.meta?.missionId)
     ) {
       pendingWorldState = null;
       return;
@@ -552,6 +569,8 @@
       !session.roomCode ||
       session.meta?.status !== "playing"
     ) return;
+    const missionId = normalizeMissionId(world?.missionId);
+    if (!missionId || missionId !== normalizeMissionId(session.meta?.missionId)) return;
     pendingWorldState = world;
     const wait = Math.max(
       0,

@@ -398,11 +398,13 @@
       "meta/maxPlayers": MAX_PLAYERS,
       "meta/worldSeed": makeWorldSeed(),
       "meta/startedAt": serverTimestamp(),
+      "meta/defeatedPlayerRole": null,
+      "meta/failureReason": null,
       world: null
     });
   }
 
-  async function returnToLobby() {
+  async function returnToLobby(finalWorld = null) {
     discardPendingMissionState();
     if (
       session.role !== "host" ||
@@ -410,12 +412,19 @@
       session.meta?.status === "lobby"
     ) return;
     const { ref, update, serverTimestamp } = firebase.databaseModule;
-    await update(ref(database, `${ROOMS_PATH}/${session.roomCode}`), {
+    const finalDefeatedPlayerRole = String(
+      finalWorld?.defeatedPlayerRole ?? ""
+    ).slice(0, 16);
+    const finalFailureReason = String(finalWorld?.failureReason ?? "").slice(0, 80);
+    const updates = {
       "meta/status": "lobby",
       "meta/maxPlayers": MAX_PLAYERS,
       "meta/endedAt": serverTimestamp(),
-      world: null
-    });
+      "meta/defeatedPlayerRole": finalDefeatedPlayerRole || null,
+      "meta/failureReason": finalFailureReason || null,
+      world: finalWorld && typeof finalWorld === "object" ? finalWorld : null
+    };
+    await update(ref(database, `${ROOMS_PATH}/${session.roomCode}`), updates);
   }
 
   async function setTank(tankId) {

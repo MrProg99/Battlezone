@@ -717,6 +717,7 @@
   let kamikazeWarningTimer = 0;
   let mineWarningTimer = 0;
   let missionFailureReason = "";
+  let defeatedPlayerRole = "";
   let environmentState = {
     type: ENVIRONMENT.CLEAR,
     intensity: 0
@@ -1167,6 +1168,12 @@
       running &&
       !gameOver
     ) {
+      const finalFailureReason = String(snapshot.meta?.failureReason ?? "").slice(0, 80);
+      const finalDefeatedPlayerRole = snapshot.meta?.defeatedPlayerRole;
+      if (finalFailureReason) missionFailureReason = finalFailureReason;
+      defeatedPlayerRole = COOP_ROLES.includes(finalDefeatedPlayerRole)
+        ? finalDefeatedPlayerRole
+        : defeatedPlayerRole;
       endGame();
     }
 
@@ -1488,6 +1495,9 @@
         }
       : createEnvironmentStateForWave(player.wave);
     missionFailureReason = String(world.failureReason ?? "").slice(0, 80);
+    defeatedPlayerRole = COOP_ROLES.includes(world.defeatedPlayerRole)
+      ? world.defeatedPlayerRole
+      : "";
 
     const incomingArmorPowerups = firebaseValues(world.armorPowerups)
       .map((powerup) => ({
@@ -1973,6 +1983,7 @@
         intensity: Number((environmentState.intensity ?? 0).toFixed(3))
       },
       failureReason: missionFailureReason,
+      defeatedPlayerRole,
       enemies: enemyStates,
       shells: shellStates,
       mines: mineStates,
@@ -5779,6 +5790,7 @@
     armorPowerupSerial = 0;
     supportTurretSerial = 0;
     missionFailureReason = "";
+    defeatedPlayerRole = "";
     missionState = createScriptedMissionState(0);
     environmentState = createEnvironmentStateForWave(0);
     renderEnvironmentVisibility = 1;
@@ -5919,11 +5931,22 @@
     if (gameOver) return;
     gameOver = true;
     running = false;
+    const finalWorld = isCoopGame() && networkSnapshot.role === "host"
+      ? buildSharedWorld()
+      : null;
     muteMotorSound();
     document.exitPointerLock?.();
+    const defeatedPlayerName =
+      !missionFailureReason &&
+      isCoopGame() &&
+      COOP_ROLES.includes(defeatedPlayerRole)
+        ? getPlayerNameForRole(defeatedPlayerRole)
+        : "";
     messageKicker.textContent = missionFailureReason
       ? "OBJECTIF PRIORITAIRE PERDU"
-      : "SIGNAL DU CHAR PERDU";
+      : defeatedPlayerName
+        ? `JOUEUR ÉLIMINÉ : ${defeatedPlayerName.toUpperCase()}`
+        : "SIGNAL DU CHAR PERDU";
     messageTitle.textContent = missionFailureReason
       ? "MISSION ÉCHOUÉE"
       : "MISSION TERMINÉE";
@@ -5931,12 +5954,15 @@
       ? " Le salon reste connecté pour lancer une nouvelle mission."
       : "";
     const failureCopy = missionFailureReason ? `${missionFailureReason}. ` : "";
+    const playerDefeatCopy = defeatedPlayerName
+      ? `Le char piloté par ${defeatedPlayerName} a été détruit. `
+      : "";
     messageCopy.textContent =
-      `${failureCopy}Score ${String(player.score).padStart(6, "0")} · ${player.kills} tanks neutralisés · vague ${player.wave} atteinte.${coopReplayMessage}`;
+      `${failureCopy}${playerDefeatCopy}Score ${String(player.score).padStart(6, "0")} · ${player.kills} tanks neutralisés · vague ${player.wave} atteinte.${coopReplayMessage}`;
     messagePanel.classList.remove("hidden");
     tone(130, 0.5, "sawtooth", 0.05);
     if (isCoopGame() && networkSnapshot.role === "host") {
-      network.returnToLobby().catch(() => {});
+      network.returnToLobby(finalWorld).catch(() => {});
     }
   }
 
@@ -8293,6 +8319,7 @@
   function failScriptedMission(reason) {
     if (gameOver || sharedGameOver) return;
     missionFailureReason = reason;
+    defeatedPlayerRole = "";
     sharedGameOver = true;
     publishSharedWorld();
     endGame();
@@ -8353,6 +8380,7 @@
       screenShake = Math.max(screenShake, shake * 0.48);
     }
     if (player.health <= 0) {
+      defeatedPlayerRole = isCoopGame() ? getLocalRole() : "";
       if (isCoopGame() && networkSnapshot.role === "host") {
         sharedGameOver = true;
         publishSharedWorld();
@@ -8419,6 +8447,7 @@
       tone(82, 0.18, "sawtooth", 0.025, -35);
     }
     if (coopHealth[role] <= 0) {
+      defeatedPlayerRole = role;
       sharedGameOver = true;
       publishSharedWorld();
       endGame();

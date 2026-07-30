@@ -63,12 +63,16 @@ Ce premier jalon synchronise :
 
 - le salon privé de deux à trois joueurs et son code d’invitation;
 - la présence et la déconnexion;
+- le nom des pilotes et leur identification au-dessus des chars alliés;
 - le type, la position, l’orientation, la tourelle et le blindage des trois chars;
 - le départ de mission déclenché par l’hôte;
 - la disposition des rochers grâce à une graine de monde commune.
 - les vagues, les ennemis, leurs tourelles et leurs obus;
+- la remise en formation des joueurs à gauche et des ennemis à droite à chaque vague;
 - l'altitude et le cycle d'attaque des drones volants;
 - les tirs des trois joueurs et les dégâts infligés aux mêmes cibles;
+- les déploiements du Soutien, ses tourelles automatiques et ses modules d'armure;
+- le classement Coop des destructions individuelles entre les vagues;
 - le score, les éliminations et le blindage partagé;
 - la fin de mission commune si l’un des chars est détruit.
 
@@ -84,21 +88,35 @@ puis interpolent le monde partagé reçu depuis `battlezone/rooms/<code>/world`.
 - `C` : recentrer progressivement la tourelle
 - Clic gauche ou espace : tirer
 - Clic droit : impulsion de choc défensive
+- `Q` avec l’Éclaireur : activer le Turbo vectoriel pendant 4 secondes
+- `Q` avec le Soutien : immobiliser le char 2 secondes et déployer une tourelle automatique pour 10 secondes
+- `Q` avec le Bastion : lancer cinq bombes orbitales dans l'axe de la tourelle
+- `E` avec le Soutien : déployer un powerup d'armure pour l'escouade
 - `P` : pause
 - `R` : recommencer après une défaite
 
 ## Contenu du prototype
 
 - Vue cockpit en perspective 3D
+- Terrain agrandi avec zones de départ opposées et formation Coop espacée
 - Cadre de cockpit blindé avec radar et jauges intégrés
 - Lune vectorielle avec cratères, croissant et parallaxe dans le ciel
 - Largage aérien du tank avec altimètre et impact au sol
-- Choix entre l’Éclaireur rapide à courte portée et le Bastion lent à longue portée
+- Trois châssis jouables : l’Éclaireur rapide, le Bastion à longue portée et le Soutien polyvalent
+- Éclaireur : Turbo vectoriel avec vitesse avant +60 %, accélération doublée, rotation +30 % et recharge de 18 secondes
+- Soutien : vitesse et portée moyennes, tourelle destructible de 3 PV, cadence automatique et module d'armure à recharge longue
+- Bastion : bombardement orbital de cinq impacts successifs avec zones d'avertissement et recharge de 35 secondes
 - Conduite et tourelle indépendantes
-- Sept ennemis : assaut, chasseur léger, artillerie, Gardien, Fantôme, Kamikaze et Drone
+- Neuf ennemis : assaut, chasseur léger, Poseur de mines, artillerie, Gardien, Fantôme, Kamikaze, Drone et le boss Behemoth
+- Poseur de mines dès la vague 4 : tank rapide, canon léger à cadence élevée et mines de proximité déclenchables par les tirs
+- Gardien de soutien : protège les unités proches et brouille les radars des joueurs dans un rayon de 640 m
+- Behemoth à la vague 5 : blindage massif, deux canons et phase Enragée sous 50 % de vie
 - Obus d’artillerie en cloche avec zone d’impact, compte à rebours et dégâts de zone
 - Kamikaze à charge directe, mèche sonore et explosion pouvant provoquer des réactions en chaîne
 - Drone rapide qui plonge, attaque en rase-mottes sans s'arrêter, puis remonte
 - Vagues progressives, score, blindage et radar
+- Missions scriptées cycliques dès la vague 6 : défendre un relais, éliminer une vague de Fantômes, puis détruire un centre de commandement en 55 secondes
+- Brouillard dense sur les missions de défense dès la vague 6 : visibilité vectorielle réduite avec radar toujours opérationnel
+- Pluie battante sur les chasses aux Fantômes dès la vague 7 : traînées vectorielles animées et légère atténuation de la vision lointaine
 - IA coordonnée avec répartition coop, lignes de tir et manœuvres de flanc
 - Effets sonores synthétisés et esthétique d’écran CRT

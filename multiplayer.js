@@ -9,6 +9,9 @@
   const WORLD_SEND_INTERVAL = 100;
   const ROOMS_PATH = "battlezone/rooms";
   const ROOM_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const MAX_PLAYER_NAME_LENGTH = 16;
+  const PLAYER_FORMATION_X = -40;
+  const PLAYER_FORMATION_Z = Object.freeze({ host: -12, guest: 0, guest2: 12 });
   const subscribers = new Set();
 
   let firebase = null;
@@ -111,6 +114,25 @@
       .slice(0, 5);
   }
 
+  function normalizePlayerName(value) {
+    const source = String(value ?? "");
+    const normalized = typeof source.normalize === "function"
+      ? source.normalize("NFKC")
+      : source;
+    return normalized
+      .replace(/[\u0000-\u001f\u007f]/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, MAX_PLAYER_NAME_LENGTH)
+      .replace(/[\ud800-\udbff]$/, "");
+  }
+
+  function normalizePlayerTankId(tankId) {
+    return ["scout", "bastion", "support"].includes(tankId)
+      ? tankId
+      : "scout";
+  }
+
   function makeRoomCode() {
     let result = "";
     const randomValues = new Uint32Array(5);
@@ -127,20 +149,23 @@
     return values[0] || 1;
   }
 
-  function makePlayer(role, tankId) {
-    const spawnX = role === "host" ? -2.8 : role === "guest" ? 2.8 : 0;
+  function makePlayer(role, tankId, playerName) {
+    tankId = normalizePlayerTankId(tankId);
     return {
       uid: session.uid,
       role,
+      name:
+        normalizePlayerName(playerName) ||
+        (role === "host" ? "HOTE" : role === "guest2" ? "ALLIE 3" : "ALLIE 2"),
       tankId,
       connected: true,
       joinedAt: Date.now(),
       state: {
         tankId,
-        x: spawnX,
-        z: 4,
+        x: PLAYER_FORMATION_X,
+        z: PLAYER_FORMATION_Z[role] ?? 0,
         altitude: 0,
-        heading: 0,
+        heading: Math.PI / 2,
         turretOffset: 0,
         health: 100,
         missionPhase: "idle",
@@ -264,7 +289,7 @@
     emit();
   }
 
-  async function createRoom(tankId = "scout") {
+  async function createRoom(tankId = "scout", playerName = "") {
     await loadFirebase();
     const { ref, runTransaction } = firebase.databaseModule;
     setPhase("creating");
@@ -282,7 +307,7 @@
           createdAt: Date.now()
         },
         players: {
-          host: makePlayer("host", tankId)
+          host: makePlayer("host", tankId, playerName)
         }
       };
       const result = await runTransaction(
@@ -299,7 +324,7 @@
     throw new Error("Impossible de réserver un code de salon. Réessayez.");
   }
 
-  async function joinRoom(rawCode, tankId = "scout") {
+  async function joinRoom(rawCode, tankId = "scout", playerName = "") {
     const roomCode = normalizeRoomCode(rawCode);
     if (roomCode.length !== 5) {
       throw new Error("Le code du salon doit contenir 5 caractères.");
@@ -327,7 +352,7 @@
       : GUEST_ROLES;
     let joinedRole = "";
     for (const role of candidates) {
-      const nextPlayer = makePlayer(role, tankId);
+      const nextPlayer = makePlayer(role, tankId, playerName);
       const slotRef = ref(database, `${ROOMS_PATH}/${roomCode}/players/${role}`);
       const result = await runTransaction(
         slotRef,
@@ -395,6 +420,7 @@
 
   async function setTank(tankId) {
     if (!playerRef || !firebase) return;
+    tankId = normalizePlayerTankId(tankId);
     const { update } = firebase.databaseModule;
     await update(playerRef, {
       tankId,
@@ -428,7 +454,7 @@
   function sendPlayerState(state) {
     if (!playerRef || session.meta?.status !== "playing") return;
     pendingState = {
-      tankId: state.tankId === "bastion" ? "bastion" : "scout",
+      tankId: normalizePlayerTankId(state.tankId),
       x: Number(state.x.toFixed(3)),
       z: Number(state.z.toFixed(3)),
       altitude: Number(state.altitude.toFixed(3)),
@@ -441,7 +467,35 @@
       shotX: Number(state.shotX.toFixed(3)),
       shotZ: Number(state.shotZ.toFixed(3)),
       shotYaw: Number(state.shotYaw.toFixed(4)),
-      shotTankId: state.shotTankId === "bastion" ? "bastion" : "scout",
+      shotTankId: normalizePlayerTankId(state.shotTankId),
+      turretDeploySequence: Math.max(
+        0,
+        Math.floor(Number(state.turretDeploySequence) || 0)
+      ),
+      turretDeployX: Number(state.turretDeployX.toFixed(3)),
+      turretDeployZ: Number(state.turretDeployZ.toFixed(3)),
+      turretDeployHeading: Number(state.turretDeployHeading.toFixed(4)),
+      armorDropSequence: Math.max(
+        0,
+        Math.floor(Number(state.armorDropSequence) || 0)
+      ),
+      armorDropX: Number(state.armorDropX.toFixed(3)),
+      armorDropZ: Number(state.armorDropZ.toFixed(3)),
+      orbitalSequence: Math.max(
+        0,
+        Math.floor(Number(state.orbitalSequence) || 0)
+      ),
+      orbitalX: Number(state.orbitalX.toFixed(3)),
+      orbitalZ: Number(state.orbitalZ.toFixed(3)),
+      orbitalYaw: Number(state.orbitalYaw.toFixed(4)),
+      supportDeployTimer: Math.max(
+        0,
+        Number((state.supportDeployTimer || 0).toFixed(3))
+      ),
+      scoutTurboTimer: Math.max(
+        0,
+        Number((state.scoutTurboTimer || 0).toFixed(3))
+      ),
       pulseSequence: state.pulseSequence,
       pulseX: Number(state.pulseX.toFixed(3)),
       pulseZ: Number(state.pulseZ.toFixed(3)),
@@ -565,6 +619,7 @@
     leaveRoom,
     subscribe,
     getState: publicState,
-    normalizeRoomCode
+    normalizeRoomCode,
+    normalizePlayerName
   };
 })();

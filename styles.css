@@ -70,6 +70,10 @@ canvas {
   text-align: center;
 }
 
+.start-screen {
+  width: min(940px, calc(100% - 40px));
+}
+
 .start-screen::before,
 .message-panel::before,
 .upgrade-panel::before {
@@ -171,6 +175,7 @@ h1 span {
   background: rgba(1, 13, 6, 0.62);
 }
 
+.player-name-field,
 .join-fields {
   display: grid;
   grid-template-columns: auto minmax(110px, 170px);
@@ -180,6 +185,7 @@ h1 span {
   margin-bottom: 8px;
 }
 
+.player-name-field label,
 .join-fields label {
   color: rgba(220, 255, 228, 0.62);
   font-size: 9px;
@@ -187,6 +193,7 @@ h1 span {
   text-transform: uppercase;
 }
 
+.player-name-field input,
 .join-fields input {
   width: 100%;
   padding: 8px 10px;
@@ -195,12 +202,18 @@ h1 span {
   outline: none;
   background: #020805;
   color: var(--amber);
-  font: 900 17px/1 "Courier New", monospace;
-  letter-spacing: 0.24em;
+  font: 900 14px/1 "Courier New", monospace;
+  letter-spacing: 0.06em;
   text-align: center;
+}
+
+.join-fields input {
+  font-size: 17px;
+  letter-spacing: 0.24em;
   text-transform: uppercase;
 }
 
+.player-name-field input:focus,
 .join-fields input:focus {
   border-color: var(--amber);
   box-shadow: 0 0 12px rgba(255, 211, 106, 0.12);
@@ -287,7 +300,7 @@ h1 span {
 
 .tank-selection {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 10px;
   margin-bottom: 16px;
 }
@@ -509,7 +522,74 @@ button small {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 10px;
-  margin: 21px 0 15px;
+  margin: 15px 0;
+}
+
+.coop-scoreboard {
+  position: relative;
+  margin: 16px 0 0;
+  border: 1px solid rgba(104, 216, 255, 0.35);
+  background: rgba(3, 18, 24, 0.72);
+  text-align: left;
+}
+
+.scoreboard-heading,
+.scoreboard-row {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.scoreboard-heading {
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 7px 11px;
+  border-bottom: 1px solid rgba(104, 216, 255, 0.2);
+  color: rgba(104, 216, 255, 0.72);
+  font-size: 8px;
+  letter-spacing: 0.12em;
+}
+
+.scoreboard-row {
+  min-height: 29px;
+  padding: 0 11px;
+  color: rgba(220, 255, 228, 0.72);
+  font: 9px/1 "Courier New", monospace;
+}
+
+.scoreboard-row + .scoreboard-row {
+  border-top: 1px solid rgba(104, 216, 255, 0.1);
+}
+
+.scoreboard-rank {
+  color: rgba(104, 216, 255, 0.55);
+}
+
+.scoreboard-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  letter-spacing: 0.06em;
+}
+
+.scoreboard-kills {
+  color: var(--amber);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.scoreboard-row.local {
+  background: rgba(104, 216, 255, 0.08);
+}
+
+.scoreboard-row.local .scoreboard-name::after {
+  content: " // VOUS";
+  color: rgba(104, 216, 255, 0.6);
+  font-size: 8px;
+}
+
+.scoreboard-row.leader .scoreboard-rank,
+.scoreboard-row.leader .scoreboard-name {
+  color: var(--amber);
 }
 
 .upgrade-button {

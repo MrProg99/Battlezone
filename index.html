@@ -34,6 +34,17 @@
       </div>
 
       <section class="online-panel hidden" id="online-panel" aria-live="polite">
+        <div class="player-name-field" id="player-name-field">
+          <label for="player-name-input">Nom du pilote</label>
+          <input
+            id="player-name-input"
+            type="text"
+            maxlength="16"
+            autocomplete="nickname"
+            spellcheck="false"
+            placeholder="Votre nom"
+          >
+        </div>
         <div class="join-fields hidden" id="join-fields">
           <label for="room-code-input">Code du salon</label>
           <input
@@ -77,7 +88,7 @@
         >
           <span class="tank-card-title">
             <strong>Éclaireur</strong>
-            <em>Assaut rapproché</em>
+            <em>Assaut et turbo vectoriel</em>
           </span>
           <svg class="tank-icon" viewBox="0 0 120 44" aria-hidden="true">
             <path d="M18 31h72l8 7H12l6-7Zm12-12h38l10 12H24l6-12Zm18-8h17v8H42l6-8Zm17 3h43" />
@@ -95,13 +106,31 @@
         >
           <span class="tank-card-title">
             <strong>Bastion</strong>
-            <em>Appui à distance</em>
+            <em>Appui et frappe orbitale</em>
           </span>
           <svg class="tank-icon" viewBox="0 0 120 44" aria-hidden="true">
             <path d="M14 28h82l10 10H8l6-10Zm17-14h45l14 14H22l9-14Zm17-8h24v8H42l6-8Zm24 4h43" />
           </svg>
           <span class="tank-stat"><span>Vitesse</span><b>2 / 5</b></span>
           <span class="tank-stat"><span>Portée</span><b>5 / 5</b></span>
+        </button>
+
+        <button
+          class="tank-card"
+          type="button"
+          role="radio"
+          aria-checked="false"
+          data-tank="support"
+        >
+          <span class="tank-card-title">
+            <strong>Soutien</strong>
+            <em>Tourelle et blindage</em>
+          </span>
+          <svg class="tank-icon" viewBox="0 0 120 44" aria-hidden="true">
+            <path d="M16 29h78l9 9H9l7-9Zm15-13h43l12 13H22l9-13Zm18-7h21v7H43l6-7Zm21 4h38M85 19h15v10H85zM92 19v-7" />
+          </svg>
+          <span class="tank-stat"><span>Vitesse</span><b>3 / 5</b></span>
+          <span class="tank-stat"><span>Portée</span><b>3 / 5</b></span>
         </button>
       </div>
 
@@ -110,6 +139,8 @@
         <div><kbd>A</kbd><kbd>D</kbd><span>Tourner le tank</span></div>
         <div><kbd>SOURIS</kbd><span>Orienter la tourelle</span></div>
         <div><kbd>CLIC</kbd><span>Tirer</span></div>
+        <div><kbd>Q</kbd><span>Turbo / bombardement / tourelle</span></div>
+        <div><kbd>E</kbd><span>Déployer une armure (Soutien)</span></div>
         <div class="recenter-control"><kbd>C</kbd><span>Recentrer la tourelle</span></div>
       </div>
 
@@ -135,6 +166,13 @@
       <p class="message-kicker" id="upgrade-kicker">SECTEUR SÉCURISÉ</p>
       <h2 id="upgrade-title">RÉGLAGE TACTIQUE</h2>
       <p class="upgrade-copy" id="upgrade-copy">Allouez votre point avant la prochaine vague.</p>
+      <section class="coop-scoreboard hidden" id="coop-scoreboard" aria-label="Classement coopératif">
+        <div class="scoreboard-heading">
+          <strong>CLASSEMENT COOP</strong>
+          <span>TANKS DÉTRUITS</span>
+        </div>
+        <div class="scoreboard-rows" id="scoreboard-rows"></div>
+      </section>
       <div class="upgrade-options" role="group" aria-label="Amélioration du tank">
         <button class="upgrade-button" type="button" data-upgrade="speed">
           <strong>PROPULSION</strong>
@@ -147,7 +185,7 @@
           <small>NIVEAU 0 → 1</small>
         </button>
         <button class="upgrade-button" type="button" data-upgrade="range">
-          <strong>TRAJECTOIRE</strong>
+          <strong>PORTÉE</strong>
           <span>PORTÉE +15 %</span>
           <small>NIVEAU 0 → 1</small>
         </button>

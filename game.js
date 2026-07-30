@@ -199,6 +199,7 @@
     z: 0,
     health: 0,
     maxHealth: 0,
+    shieldTimer: 0,
     timer: 0,
     targetEnemyId: 0
   };
@@ -845,6 +846,7 @@
         z: Number(sharedMission.z) || 0,
         health: Math.max(0, Number(sharedMission.health) || 0),
         maxHealth: Math.max(0, Number(sharedMission.maxHealth) || 0),
+        shieldTimer: Math.max(0, Number(sharedMission.shieldTimer) || 0),
         timer: Math.max(0, Number(sharedMission.timer) || 0),
         targetEnemyId: Number(sharedMission.targetEnemyId) || 0
       };
@@ -1343,6 +1345,7 @@
         z: Number((missionState.z ?? 0).toFixed(3)),
         health: Math.max(0, Math.round(missionState.health ?? 0)),
         maxHealth: Math.max(0, Math.round(missionState.maxHealth ?? 0)),
+        shieldTimer: Number((missionState.shieldTimer ?? 0).toFixed(3)),
         timer: Number((missionState.timer ?? 0).toFixed(3)),
         targetEnemyId: Number(missionState.targetEnemyId) || 0
       },
@@ -2980,7 +2983,12 @@
     const progress = missionState.maxHealth > 0
       ? Math.max(0, Math.min(1, missionState.health / missionState.maxHealth))
       : 0;
-    const color = progress <= 0.3 ? COLORS.red : COLORS.cyan;
+    const shielded = missionState.shieldTimer > 0;
+    const color = shielded
+      ? COLORS.green
+      : progress <= 0.3
+        ? COLORS.red
+        : COLORS.cyan;
     const pulse = 1 + Math.sin(performance.now() * 0.007) * 0.08;
     const radius = 3.15 * pulse;
     const segments = 24;
@@ -3002,6 +3010,31 @@
         1.4,
         0.78
       );
+    }
+
+    if (shielded) {
+      const shieldRadius = 4.2 + Math.sin(performance.now() * 0.01) * 0.12;
+      for (const [height, radiusScale] of [[0.45, 0.76], [1.7, 1], [3.05, 0.72]]) {
+        for (let index = 0; index < segments; index += 1) {
+          const angleA = index / segments * TAU;
+          const angleB = (index + 1) / segments * TAU;
+          line3d(
+            {
+              x: missionState.x + Math.sin(angleA) * shieldRadius * radiusScale,
+              y: height,
+              z: missionState.z + Math.cos(angleA) * shieldRadius * radiusScale
+            },
+            {
+              x: missionState.x + Math.sin(angleB) * shieldRadius * radiusScale,
+              y: height,
+              z: missionState.z + Math.cos(angleB) * shieldRadius * radiusScale
+            },
+            COLORS.green,
+            1.15,
+            0.42
+          );
+        }
+      }
     }
 
     const base = { x: missionState.x, y: 0.04, z: missionState.z };
@@ -3028,7 +3061,9 @@
     ctx.textAlign = "center";
     ctx.font = "900 9px Courier New";
     ctx.fillText(
-      `RELAIS // ${Math.ceil(missionState.health)}/${missionState.maxHealth}`,
+      shielded
+        ? `RELAIS // BOUCLIER ${missionState.shieldTimer.toFixed(1)} s`
+        : `RELAIS // ${Math.ceil(missionState.health)}/${missionState.maxHealth}`,
       label.x,
       label.y
     );
@@ -4407,8 +4442,10 @@
       progress = missionState.maxHealth > 0
         ? Math.max(0, Math.min(1, missionState.health / missionState.maxHealth))
         : 0;
-      color = progress <= 0.3 ? COLORS.red : COLORS.cyan;
+      const shielded = missionState.shieldTimer > 0;
+      color = shielded ? COLORS.green : progress <= 0.3 ? COLORS.red : COLORS.cyan;
       label = `DÉFENSE // RELAIS ${Math.ceil(missionState.health)}/${missionState.maxHealth}`;
+      if (shielded) label += ` // BOUCLIER ${missionState.shieldTimer.toFixed(1)}s`;
     } else if (missionState.type === SCRIPTED_MISSION.STEALTH) {
       const remaining = enemies.filter(
         (enemy) => getEnemyType(enemy).id === "ghost"
@@ -4717,7 +4754,13 @@
   function createScriptedMissionState(wave) {
     const type = getScriptedMissionType(wave);
     const cycle = Math.max(0, Math.floor((wave - SCRIPTED_MISSION.STARTING_WAVE) / 3));
-    const defenseHealth = SCRIPTED_MISSION.DEFENSE_HEALTH + cycle * 10;
+    const extraCoopPlayers = type === SCRIPTED_MISSION.DEFEND && isCoopGame()
+      ? Math.max(0, Math.min(MAX_COOP_PLAYERS, networkSnapshot.playerCount || 1) - 1)
+      : 0;
+    const defenseHealth =
+      SCRIPTED_MISSION.DEFENSE_HEALTH +
+      cycle * 10 +
+      extraCoopPlayers * SCRIPTED_MISSION.DEFENSE_HEALTH_PER_EXTRA_PLAYER;
     return {
       type,
       active: type !== SCRIPTED_MISSION.STANDARD,
@@ -4726,6 +4769,9 @@
       z: type === SCRIPTED_MISSION.DEFEND ? SCRIPTED_MISSION.DEFENSE_Z : 0,
       health: type === SCRIPTED_MISSION.DEFEND ? defenseHealth : 0,
       maxHealth: type === SCRIPTED_MISSION.DEFEND ? defenseHealth : 0,
+      shieldTimer: type === SCRIPTED_MISSION.DEFEND
+        ? SCRIPTED_MISSION.DEFENSE_SHIELD_TIME
+        : 0,
       timer: type === SCRIPTED_MISSION.DEMOLITION
         ? SCRIPTED_MISSION.DEMOLITION_TIME
         : 0,
@@ -7020,7 +7066,9 @@
       const range = distance(enemy, target);
       const assignedEnemies = targetLoads.get(target.role) ?? 0;
       let score = range + assignedEnemies * (countsTowardLoad ? 8 : 0);
-      if (target.role === "objective") score -= 12;
+      if (target.role === "objective") {
+        score += SCRIPTED_MISSION.DEFENSE_TARGET_PRIORITY;
+      }
       if (String(target.role).startsWith("turret:")) score += 4;
       if (type.kamikaze) score += target.health * 0.075;
       if (target.role === enemy.targetRole) score -= 2.5;
@@ -7582,6 +7630,7 @@
   function updateScriptedMission(dt) {
     if (!isWorldAuthority() || !missionState.active || gameOver) return;
     if (missionState.type === SCRIPTED_MISSION.DEFEND) {
+      missionState.shieldTimer = Math.max(0, missionState.shieldTimer - dt);
       if (missionState.health <= 0) {
         failScriptedMission("LE RELAIS A ÉTÉ DÉTRUIT");
       }
@@ -7665,6 +7714,12 @@
         missionState.type !== SCRIPTED_MISSION.DEFEND ||
         missionState.health <= 0
       ) return;
+      if (missionState.shieldTimer > 0) {
+        burst(impactX, impactZ, COLORS.green, 8, 0.3);
+        screenShake = Math.max(screenShake, shake * 0.08);
+        tone(460, 0.045, "square", 0.012, 90);
+        return;
+      }
       missionState.health = Math.max(0, missionState.health - Math.round(amount));
       burst(impactX, impactZ, COLORS.cyan, 14);
       screenShake = Math.max(screenShake, shake * 0.32);

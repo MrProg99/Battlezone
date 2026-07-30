@@ -128,6 +128,7 @@ avec l’ouverture directe de `index.html`, sans installation ni étape de compi
 - Drone rapide qui plonge, attaque en rase-mottes sans s'arrêter, puis remonte
 - Vagues progressives, score, blindage et radar
 - Missions scriptées cycliques dès la vague 6 : défendre un relais, éliminer une vague de Fantômes, puis détruire un centre de commandement en 55 secondes
+- Défense du relais : 180 PV, +30 PV par allié supplémentaire et bouclier de déploiement de 2 secondes
 - Brouillard dense sur les missions de défense dès la vague 6 : visibilité vectorielle réduite avec radar toujours opérationnel
 - Pluie battante sur les chasses aux Fantômes dès la vague 7 : traînées vectorielles animées et légère atténuation de la vision lointaine
 - IA coordonnée avec répartition coop, lignes de tir et manœuvres de flanc

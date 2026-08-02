@@ -495,7 +495,8 @@ button small {
 
 .upgrade-panel {
   z-index: 5;
-  max-width: 690px;
+  width: min(960px, calc(100% - 40px));
+  max-width: 960px;
 }
 
 .upgrade-panel h2 {
@@ -520,7 +521,7 @@ button small {
 
 .upgrade-options {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
   gap: 10px;
   margin: 15px 0;
 }

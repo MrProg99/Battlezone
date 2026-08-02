@@ -13,6 +13,13 @@
   const MAX_PLAYER_NAME_LENGTH = 16;
   const PLAYER_FORMATION_X = -40;
   const PLAYER_FORMATION_Z = Object.freeze({ host: -12, guest: 0, guest2: 12 });
+  const UPGRADE_IDS = window.BattlezoneConfig?.UPGRADE_IDS ?? Object.freeze([
+    "speed",
+    "armor",
+    "range",
+    "systems",
+    "fireRate"
+  ]);
   const subscribers = new Set();
 
   let firebase = null;
@@ -525,12 +532,20 @@
       pulseX: Number(state.pulseX.toFixed(3)),
       pulseZ: Number(state.pulseZ.toFixed(3)),
       upgradeRound: Math.max(0, Math.floor(Number(state.upgradeRound) || 0)),
-      upgradeChoice: ["speed", "armor", "range"].includes(state.upgradeChoice)
+      upgradeChoice: UPGRADE_IDS.includes(state.upgradeChoice)
         ? state.upgradeChoice
         : "",
       upgradeSpeed: Math.max(0, Math.floor(Number(state.upgradeSpeed) || 0)),
       upgradeArmor: Math.max(0, Math.floor(Number(state.upgradeArmor) || 0)),
       upgradeRange: Math.max(0, Math.floor(Number(state.upgradeRange) || 0)),
+      upgradeSystems: Math.max(
+        0,
+        Math.floor(Number(state.upgradeSystems) || 0)
+      ),
+      upgradeFireRate: Math.max(
+        0,
+        Math.floor(Number(state.upgradeFireRate) || 0)
+      ),
       updatedAt: Date.now()
     };
 

@@ -13,6 +13,7 @@
     pauseLabel: document.querySelector("#pause-label"),
     upgradePanel: document.querySelector("#upgrade-panel"),
     upgradeKicker: document.querySelector("#upgrade-kicker"),
+    upgradeTitle: document.querySelector("#upgrade-title"),
     upgradeCopy: document.querySelector("#upgrade-copy"),
     upgradeStatus: document.querySelector("#upgrade-status"),
     coopScoreboard: document.querySelector("#coop-scoreboard"),
@@ -182,28 +183,36 @@
     readyCount,
     roleCount,
     coop,
-    upgradeLabels
+    tankLabel,
+    upgradeOptions
   }) {
     elements.upgradePanel.classList.toggle("hidden", !visible);
     if (!visible) return;
     elements.upgradeKicker.textContent =
       `VAGUE ${String(round).padStart(2, "0")} // SECTEUR SÉCURISÉ`;
+    elements.upgradeTitle.textContent = `PERSONNALISATION // ${tankLabel}`;
     elements.upgradeCopy.textContent =
-      "ALLOUEZ VOTRE POINT AVANT LA PROCHAINE VAGUE.";
+      "CHOISISSEZ UN MODULE ADAPTÉ À VOTRE CHÂSSIS.";
 
     for (const button of elements.upgradeButtons) {
       const id = button.dataset.upgrade;
       const level = stats[id] ?? 0;
       const selected = choice === id;
+      const option = upgradeOptions[id];
+      const maxed = option.maxLevel > 0 && level >= option.maxLevel;
       button.classList.toggle("selected", selected);
-      button.disabled = Boolean(choice);
+      button.disabled = Boolean(choice) || maxed;
+      button.querySelector("strong").textContent = option.label;
+      button.querySelector("span").textContent = option.description;
       button.querySelector("small").textContent = selected
         ? `NIVEAU ${level} ACQUIS`
-        : `NIVEAU ${level} → ${level + 1}`;
+        : maxed
+          ? `NIVEAU ${level} MAXIMUM`
+          : `NIVEAU ${level} → ${level + 1}`;
     }
 
     if (choice) {
-      const label = upgradeLabels[choice];
+      const label = upgradeOptions[choice].label;
       elements.upgradeStatus.textContent = coop
         ? `${label} CONFIRMÉ // ESCOUADE ${readyCount}/${roleCount}`
         : `${label} CONFIRMÉ // DÉPLOIEMENT EN COURS`;

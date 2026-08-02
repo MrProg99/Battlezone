@@ -62,6 +62,7 @@
     STEALTH: "stealth",
     DEMOLITION: "demolition",
     TRAIN: "train",
+    MINEFIELD: "minefield",
     STARTING_WAVE: 6,
     DEFENSE_X: -18,
     DEFENSE_Z: 0,
@@ -94,6 +95,38 @@
     SHELL_DAMAGE: 12,
     TRACK_GAUGE: 1.55,
     TRACK_CLEARANCE: 5.5
+  });
+  const MINEFIELD_MISSION = Object.freeze({
+    BASE_MINE_COUNT: 24,
+    MINES_PER_EXTRA_PLAYER: 4,
+    FIELD_MIN_X: -20,
+    FIELD_MAX_X: 34,
+    FIELD_Z_LIMIT: 52,
+    CLUSTER_COUNT: 6,
+    CLUSTER_RADIUS: 8,
+    MIN_SPACING: 3.4,
+    CORRIDOR_Z: Object.freeze([-16, 0, 16]),
+    CORRIDOR_WAVE_AMPLITUDE: 2.4,
+    CORRIDOR_WAVE_FREQUENCY: 0.09,
+    CORRIDOR_HALF_WIDTH: 4.2,
+    LIFETIME: 180,
+    ENEMY_SPAWN_MIN_X: 44,
+    ENEMY_SPAWN_MAX_X: 82
+  });
+  const BEHEMOTH_MORTAR = Object.freeze({
+    INITIAL_DELAY: 3.8,
+    RELOAD: 6,
+    ENRAGED_RELOAD: 4,
+    SALVO_COUNT: 3,
+    SALVO_STAGGER: 0.32,
+    FLIGHT_TIME: 1.25,
+    LEAD_TIME: 0.72,
+    MIN_RANGE: 12,
+    MAX_RANGE: 80,
+    SCATTER_RADIUS: 1.35,
+    SALVO_SPACING: 1.8,
+    BLAST_RADIUS: 3.6,
+    BLAST_DAMAGE: 14
   });
   const ENVIRONMENT = Object.freeze({
     CLEAR: "clear",
@@ -173,11 +206,53 @@
     TURN_MULTIPLIER: 1.3
   });
   const TANK_UPGRADES = Object.freeze({
-    speed: Object.freeze({ label: "PROPULSION", speedMultiplier: 0.07 }),
-    armor: Object.freeze({ label: "BLINDAGE", damageReduction: 0.08 }),
-    range: Object.freeze({ label: "TRAJECTOIRE", rangeMultiplier: 0.15 })
+    speed: Object.freeze({
+      label: "PROPULSION",
+      description: "VITESSE +7 %",
+      speedMultiplier: 0.07
+    }),
+    armor: Object.freeze({
+      label: "BLINDAGE",
+      description: "DÉGÂTS REÇUS -8 %",
+      damageReduction: 0.08
+    }),
+    range: Object.freeze({
+      label: "TRAJECTOIRE",
+      description: "PORTÉE +15 %",
+      rangeMultiplier: 0.15
+    }),
+    systems: Object.freeze({
+      label: "SYSTÈMES",
+      description: "RECHARGE CAPACITÉ -8 %",
+      cooldownReduction: 0.08,
+      minimumMultiplier: 0.6,
+      maxLevel: 5,
+      tankLabels: Object.freeze({
+        scout: "TURBO VECTORIEL",
+        bastion: "BOMBARDEMENT",
+        support: "DÉPLOIEMENTS"
+      }),
+      tankDescriptions: Object.freeze({
+        scout: "RECHARGE TURBO -8 %",
+        bastion: "RECHARGE ORBITALE -8 %",
+        support: "RECHARGE TOURELLE + ARMURE -8 %"
+      })
+    }),
+    fireRate: Object.freeze({
+      label: "CADENCE",
+      description: "RECHARGE CANON -4 %",
+      reloadReduction: 0.04,
+      minimumMultiplier: 0.8,
+      maxLevel: 5
+    })
   });
-  const UPGRADE_IDS = Object.freeze(["speed", "armor", "range"]);
+  const UPGRADE_IDS = Object.freeze([
+    "speed",
+    "armor",
+    "range",
+    "systems",
+    "fireRate"
+  ]);
   const ARMOR_POWERUP = Object.freeze({
     STARTING_WAVE: 3,
     CHARGE: 42,
@@ -238,6 +313,46 @@
       score: 140,
       static: false,
       priority: false
+    }),
+    wasp: Object.freeze({
+      id: "wasp",
+      label: "GUÊPE",
+      code: "W",
+      health: 1,
+      speed: 5.15,
+      speedVariance: 0.65,
+      preferredRangeMin: 17,
+      preferredRangeMax: 24,
+      scale: 0.68,
+      hitRadius: 0.7,
+      chassisTurnRate: 2.15,
+      turretTurnRate: 3.25,
+      fireRange: 38,
+      fireAlignment: 0.2,
+      reloadBase: 3.35,
+      reloadMin: 2.35,
+      reloadJitter: 0.55,
+      shellSpeed: 24,
+      shellLifetime: 2.2,
+      shellDamage: 3,
+      score: 260,
+      static: false,
+      priority: false,
+      wasp: true,
+      flanker: true,
+      startingWave: 8,
+      secondStartingWave: 11,
+      burstCount: 3,
+      burstInterval: 0.13,
+      fireRecoveryDuration: 0.72,
+      fireRecoveryMultiplier: 0.32,
+      dodgeChance: 0.96,
+      dodgeLookAhead: 0.95,
+      dodgeDuration: 0.5,
+      dodgeCooldown: 0.72,
+      dodgeWindup: 0.2,
+      dodgeSpeedMultiplier: 1.62,
+      dodgeTurnMultiplier: 1.18
     }),
     minelayer: Object.freeze({
       id: "minelayer",
@@ -392,13 +507,16 @@
       label: "BEHEMOTH",
       code: "B",
       health: 32,
-      speed: 1.05,
-      speedVariance: 0.18,
-      preferredRangeMin: 25,
-      preferredRangeMax: 34,
+      speed: 1.85,
+      speedVariance: 0.3,
+      preferredRangeMin: 18,
+      preferredRangeMax: 25,
       scale: 1.72,
       hitRadius: 1.62,
-      turretTurnRate: 1.05,
+      chassisTurnRate: 1.35,
+      turretTurnRate: 1.22,
+      enrageSpeedMultiplier: 1.42,
+      enrageTurnMultiplier: 1.22,
       fireRange: 62,
       fireAlignment: 0.12,
       reloadBase: 3.2,
@@ -411,7 +529,8 @@
       static: false,
       priority: true,
       boss: true,
-      twinCannon: true
+      twinCannon: true,
+      mortar: true
     }),
     hangar: Object.freeze({
       id: "hangar",
@@ -636,6 +755,8 @@
     MINELAYER,
     SCRIPTED_MISSION,
     TRAIN_MISSION,
+    MINEFIELD_MISSION,
+    BEHEMOTH_MORTAR,
     ENVIRONMENT,
     RAMP_SYSTEM,
     KAMIKAZE_TRIGGER_RADIUS,

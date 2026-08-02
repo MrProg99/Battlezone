@@ -13,7 +13,8 @@
     SCRIPTED_MISSION.DEFEND,
     SCRIPTED_MISSION.STEALTH,
     SCRIPTED_MISSION.DEMOLITION,
-    SCRIPTED_MISSION.TRAIN
+    SCRIPTED_MISSION.TRAIN,
+    SCRIPTED_MISSION.MINEFIELD
   ]);
 
   function createDefenseState({ cycle, coop, playerCount }) {
@@ -98,6 +99,14 @@
       active: true,
       environment: null,
       createState: createTrainState,
+      allowHangar: false
+    }),
+    [SCRIPTED_MISSION.MINEFIELD]: Object.freeze({
+      id: SCRIPTED_MISSION.MINEFIELD,
+      title: "CHAMP DE MINES",
+      subtitle: "TROUVER UN PASSAGE // ÉLIMINER LA VAGUE",
+      active: true,
+      environment: null,
       allowHangar: false
     })
   });
@@ -243,11 +252,29 @@
     if (normalizedWave === 5 && index === count - 1) {
       return ENEMY_TYPES.behemoth;
     }
+    if (
+      definition.id === SCRIPTED_MISSION.MINEFIELD &&
+      (index === 2 || index === 3)
+    ) {
+      return ENEMY_TYPES.minelayer;
+    }
     if (index === count - 1) return ENEMY_TYPES.artillery;
     if (normalizedWave >= 3 && index === count - 2) return ENEMY_TYPES.guardian;
     if (normalizedWave >= 4 && index === count - 3) return ENEMY_TYPES.ghost;
     if (normalizedWave >= 5 && index === count - 4) return ENEMY_TYPES.kamikaze;
     if (normalizedWave >= 6 && index === count - 5) return ENEMY_TYPES.drone;
+    if (
+      normalizedWave >= ENEMY_TYPES.wasp.secondStartingWave &&
+      index === 0
+    ) {
+      return ENEMY_TYPES.wasp;
+    }
+    if (
+      normalizedWave >= ENEMY_TYPES.wasp.startingWave &&
+      index === 2
+    ) {
+      return ENEMY_TYPES.wasp;
+    }
     if (normalizedWave >= MINELAYER.STARTING_WAVE && index === 3) {
       return ENEMY_TYPES.minelayer;
     }

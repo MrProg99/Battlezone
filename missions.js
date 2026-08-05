@@ -14,7 +14,9 @@
     SCRIPTED_MISSION.STEALTH,
     SCRIPTED_MISSION.DEMOLITION,
     SCRIPTED_MISSION.TRAIN,
-    SCRIPTED_MISSION.MINEFIELD
+    SCRIPTED_MISSION.MINEFIELD,
+    SCRIPTED_MISSION.SURVIVAL,
+    SCRIPTED_MISSION.GENERATORS
   ]);
 
   function createDefenseState({ cycle, coop, playerCount }) {
@@ -42,6 +44,14 @@
 
   function createTrainState() {
     return { targetEnemyId: 0 };
+  }
+
+  function createSurvivalState() {
+    return {
+      timer: SCRIPTED_MISSION.SURVIVAL_TIME,
+      reinforcementsPending: 0,
+      nextReinforcementTimer: 0
+    };
   }
 
   const MISSION_CATALOG = Object.freeze({
@@ -108,6 +118,23 @@
       active: true,
       environment: null,
       allowHangar: false
+    }),
+    [SCRIPTED_MISSION.SURVIVAL]: Object.freeze({
+      id: SCRIPTED_MISSION.SURVIVAL,
+      title: "SURVIE",
+      subtitle: "TENIR 02:00 // RENFORTS ENNEMIS CONTINUS",
+      active: true,
+      environment: null,
+      createState: createSurvivalState,
+      allowHangar: false
+    }),
+    [SCRIPTED_MISSION.GENERATORS]: Object.freeze({
+      id: SCRIPTED_MISSION.GENERATORS,
+      title: "RUPTURE DE BOUCLIER",
+      subtitle: "DÉTRUIRE LES 2 GÉNÉRATEURS // ÉLIMINER LA VAGUE",
+      active: true,
+      environment: null,
+      allowHangar: false
     })
   });
 
@@ -158,7 +185,9 @@
       maxHealth: 0,
       shieldTimer: 0,
       timer: 0,
-      targetEnemyId: 0
+      targetEnemyId: 0,
+      reinforcementsPending: 0,
+      nextReinforcementTimer: 0
     };
     if (!definition.createState) return state;
     return {

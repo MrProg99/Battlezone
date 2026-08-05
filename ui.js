@@ -19,6 +19,7 @@
     coopScoreboard: document.querySelector("#coop-scoreboard"),
     scoreboardRows: document.querySelector("#scoreboard-rows"),
     upgradeButtons: [...document.querySelectorAll(".upgrade-button")],
+    chassisSkillShortcut: document.querySelector("#chassis-skill-shortcut"),
     tankCards: [...document.querySelectorAll(".tank-card")],
     modeButtons: [...document.querySelectorAll(".mode-button")],
     onlinePanel: document.querySelector("#online-panel"),
@@ -193,19 +194,39 @@
     elements.upgradeTitle.textContent = `PERSONNALISATION // ${tankLabel}`;
     elements.upgradeCopy.textContent =
       "CHOISISSEZ UN MODULE ADAPTÉ À VOTRE CHÂSSIS.";
+    const chassisSkillVisible = [
+      "twinCannon",
+      "holographicDecoy",
+      "spectralAmbush"
+    ].some(
+      (id) => upgradeOptions[id]?.visible
+    );
+    elements.chassisSkillShortcut?.classList.toggle(
+      "hidden",
+      !chassisSkillVisible
+    );
 
     for (const button of elements.upgradeButtons) {
       const id = button.dataset.upgrade;
       const level = stats[id] ?? 0;
       const selected = choice === id;
       const option = upgradeOptions[id];
+      const optionVisible = option?.visible !== false;
+      button.classList.toggle("hidden", !optionVisible);
+      if (!optionVisible) {
+        button.disabled = true;
+        continue;
+      }
+      const locked = option.available === false;
       const maxed = option.maxLevel > 0 && level >= option.maxLevel;
       button.classList.toggle("selected", selected);
-      button.disabled = Boolean(choice) || maxed;
+      button.disabled = Boolean(choice) || locked || maxed;
       button.querySelector("strong").textContent = option.label;
       button.querySelector("span").textContent = option.description;
       button.querySelector("small").textContent = selected
         ? `NIVEAU ${level} ACQUIS`
+        : locked
+          ? `DÉBLOCAGE APRÈS VAGUE ${option.unlockRound}`
         : maxed
           ? `NIVEAU ${level} MAXIMUM`
           : `NIVEAU ${level} → ${level + 1}`;

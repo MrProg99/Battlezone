@@ -132,6 +132,24 @@
           <span class="tank-stat"><span>Vitesse</span><b>3 / 5</b></span>
           <span class="tank-stat"><span>Portée</span><b>3 / 5</b></span>
         </button>
+
+        <button
+          class="tank-card"
+          type="button"
+          role="radio"
+          aria-checked="false"
+          data-tank="spectre"
+        >
+          <span class="tank-card-title">
+            <strong>Spectre</strong>
+            <em>Infiltration et camouflage de phase</em>
+          </span>
+          <svg class="tank-icon" viewBox="0 0 120 44" aria-hidden="true">
+            <path d="M19 30h70l12 8H10l9-8Zm13-13h38l14 13H23l9-13Zm17-8h18v8H43l6-8Zm18 4h42M25 25 15 18m70 7 10-8M51 9l7-6 7 6" />
+          </svg>
+          <span class="tank-stat"><span>Vitesse</span><b>4 / 5</b></span>
+          <span class="tank-stat"><span>Portée</span><b>4 / 5</b></span>
+        </button>
       </div>
 
       <div class="controls">
@@ -139,8 +157,8 @@
         <div><kbd>A</kbd><kbd>D</kbd><span>Tourner le tank</span></div>
         <div><kbd>SOURIS</kbd><span>Orienter la tourelle</span></div>
         <div><kbd>CLIC</kbd><span>Tirer</span></div>
-        <div><kbd>Q</kbd><span>Turbo / bombardement / tourelle</span></div>
-        <div><kbd>E</kbd><span>Déployer une armure (Soutien)</span></div>
+        <div><kbd>Q</kbd><span>Capacité spéciale du châssis</span></div>
+        <div><kbd>E</kbd><span>Leurre (Scout) / Armure (Soutien)</span></div>
         <div class="recenter-control"><kbd>C</kbd><span>Recentrer la tourelle</span></div>
       </div>
 
@@ -199,9 +217,24 @@
           <span>RECHARGE CANON -4 %</span>
           <small>NIVEAU 0 → 1</small>
         </button>
+        <button class="upgrade-button hidden" type="button" data-upgrade="twinCannon">
+          <strong>CANON JUMELÉ</strong>
+          <span>DEUX OBUS PAR TIR</span>
+          <small>DÉBLOCAGE APRÈS VAGUE 1</small>
+        </button>
+        <button class="upgrade-button hidden" type="button" data-upgrade="holographicDecoy">
+          <strong>LEURRE HOLOGRAPHIQUE</strong>
+          <span>E // FAUX TANK À 4 PV</span>
+          <small>DÉBLOCAGE APRÈS VAGUE 1</small>
+        </button>
+        <button class="upgrade-button hidden" type="button" data-upgrade="spectralAmbush">
+          <strong>EMBUSCADE SPECTRALE</strong>
+          <span>SORTIE CAMOUFLAGE // TIR 2X PERFORANT</span>
+          <small>DÉBLOCAGE APRÈS VAGUE 1</small>
+        </button>
       </div>
       <p class="upgrade-status" id="upgrade-status"></p>
-      <p class="upgrade-hint">RACCOURCIS : <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>4</kbd> <kbd>5</kbd></p>
+      <p class="upgrade-hint">RACCOURCIS : <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>4</kbd> <kbd>5</kbd><span class="hidden" id="chassis-skill-shortcut"> <kbd>6</kbd></span></p>
     </section>
 
     <div class="pause-label hidden" id="pause-label">PAUSE</div>

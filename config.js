@@ -17,6 +17,7 @@
     amber: "#ffd36a",
     red: "#ff695e",
     cyan: "#68d8ff",
+    violet: "#c88cff",
     white: "#dcffe4",
     black: "#020504"
   };
@@ -63,6 +64,8 @@
     DEMOLITION: "demolition",
     TRAIN: "train",
     MINEFIELD: "minefield",
+    SURVIVAL: "survival",
+    GENERATORS: "generators",
     STARTING_WAVE: 6,
     DEFENSE_X: -18,
     DEFENSE_Z: 0,
@@ -70,7 +73,13 @@
     DEFENSE_HEALTH_PER_EXTRA_PLAYER: 30,
     DEFENSE_SHIELD_TIME: 2,
     DEFENSE_TARGET_PRIORITY: -8,
-    DEMOLITION_TIME: 55
+    DEMOLITION_TIME: 55,
+    SURVIVAL_TIME: 120,
+    SURVIVAL_REINFORCEMENT_DELAY: 10,
+    SURVIVAL_DROP_HEIGHT: 18,
+    SURVIVAL_DROP_SPEED: 9,
+    GENERATOR_X: 74,
+    GENERATOR_Z_OFFSET: 25
   });
   const TRAIN_MISSION = Object.freeze({
     RAIL_Z: 22,
@@ -205,6 +214,24 @@
     ACCELERATION_MULTIPLIER: 2,
     TURN_MULTIPLIER: 1.3
   });
+  const HOLOGRAPHIC_DECOY = Object.freeze({
+    HEALTH: 4,
+    LIFETIME: 16,
+    COOLDOWN: 20,
+    ATTRACTION_RADIUS: 42,
+    TARGET_PRIORITY: 34,
+    HIT_RADIUS: 1.35,
+    EXPLOSION_RADIUS: 5.5,
+    EXPLOSION_DAMAGE: 2
+  });
+  const PHASE_CLOAK = Object.freeze({
+    DURATION: 5,
+    COOLDOWN: 22,
+    DETECTION_RADIUS: 8,
+    AMBUSH_DURATION: 4,
+    AMBUSH_DAMAGE: 2,
+    AMBUSH_PIERCE: 1
+  });
   const TANK_UPGRADES = Object.freeze({
     speed: Object.freeze({
       label: "PROPULSION",
@@ -230,12 +257,14 @@
       tankLabels: Object.freeze({
         scout: "TURBO VECTORIEL",
         bastion: "BOMBARDEMENT",
-        support: "DÉPLOIEMENTS"
+        support: "DÉPLOIEMENTS",
+        spectre: "CAMOUFLAGE"
       }),
       tankDescriptions: Object.freeze({
-        scout: "RECHARGE TURBO -8 %",
+        scout: "RECHARGE TURBO + LEURRE -8 %",
         bastion: "RECHARGE ORBITALE -8 %",
-        support: "RECHARGE TOURELLE + ARMURE -8 %"
+        support: "RECHARGE TOURELLE + ARMURE -8 %",
+        spectre: "RECHARGE CAMOUFLAGE -8 %"
       })
     }),
     fireRate: Object.freeze({
@@ -244,6 +273,27 @@
       reloadReduction: 0.04,
       minimumMultiplier: 0.8,
       maxLevel: 5
+    }),
+    twinCannon: Object.freeze({
+      label: "CANON JUMELÉ",
+      description: "DEUX OBUS PAR TIR",
+      maxLevel: 1,
+      tankId: "bastion",
+      unlockRound: 1
+    }),
+    holographicDecoy: Object.freeze({
+      label: "LEURRE HOLOGRAPHIQUE",
+      description: "E // FAUX TANK À 4 PV",
+      maxLevel: 1,
+      tankId: "scout",
+      unlockRound: 1
+    }),
+    spectralAmbush: Object.freeze({
+      label: "EMBUSCADE SPECTRALE",
+      description: "SORTIE CAMOUFLAGE // TIR 2X PERFORANT",
+      maxLevel: 1,
+      tankId: "spectre",
+      unlockRound: 1
     })
   });
   const UPGRADE_IDS = Object.freeze([
@@ -251,7 +301,10 @@
     "armor",
     "range",
     "systems",
-    "fireRate"
+    "fireRate",
+    "twinCannon",
+    "holographicDecoy",
+    "spectralAmbush"
   ]);
   const ARMOR_POWERUP = Object.freeze({
     STARTING_WAVE: 3,
@@ -585,6 +638,32 @@
       support: true,
       objectiveBuilding: true
     }),
+    powerGenerator: Object.freeze({
+      id: "powerGenerator",
+      label: "GÉNÉRATEUR",
+      code: "G",
+      health: 8,
+      speed: 0,
+      speedVariance: 0,
+      preferredRangeMin: 0,
+      preferredRangeMax: 0,
+      scale: 1.75,
+      hitRadius: 1.85,
+      turretTurnRate: 0,
+      fireRange: 0,
+      fireAlignment: 0,
+      reloadBase: 99,
+      reloadMin: 99,
+      reloadJitter: 0,
+      shellSpeed: 0,
+      shellLifetime: 0,
+      score: 550,
+      static: true,
+      priority: true,
+      support: true,
+      objectiveBuilding: true,
+      powerGenerator: true
+    }),
     armoredTrain: Object.freeze({
       id: "armoredTrain",
       label: "TRAIN BLINDÉ",
@@ -733,6 +812,18 @@
       shellSpeed: 34,
       shellLifetime: 1.58,
       reloadTime: 0.78
+    }),
+    spectre: Object.freeze({
+      id: "spectre",
+      label: "SPECTRE",
+      forwardSpeed: 9.4,
+      reverseSpeed: 5.6,
+      turnRate: 1.34,
+      acceleration: 3.7,
+      coastResponse: 5.6,
+      shellSpeed: 36,
+      shellLifetime: 1.72,
+      reloadTime: 0.86
     })
   });
 
@@ -772,6 +863,8 @@
     SUPPORT_SYSTEM,
     ORBITAL_BARRAGE,
     VECTOR_TURBO,
+    HOLOGRAPHIC_DECOY,
+    PHASE_CLOAK,
     TANK_UPGRADES,
     UPGRADE_IDS,
     ARMOR_POWERUP,

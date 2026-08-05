@@ -17,6 +17,14 @@
   } = ui.elements;
   const ctx = canvas.getContext("2d");
   const network = window.BattlezoneNetwork;
+  const PLAYER_STATE_BUILD_INTERVAL = Math.max(
+    16,
+    Number(network?.sendIntervals?.player) || 90
+  );
+  const WORLD_STATE_BUILD_INTERVAL = Math.max(
+    16,
+    Number(network?.sendIntervals?.world) || 100
+  );
   const audio = window.BattlezoneAudio;
   const terrain = window.BattlezoneTerrain;
   const {
@@ -87,6 +95,8 @@
     SUPPORT_SYSTEM,
     ORBITAL_BARRAGE,
     VECTOR_TURBO,
+    HOLOGRAPHIC_DECOY,
+    PHASE_CLOAK,
     TANK_UPGRADES,
     UPGRADE_IDS,
     ARMOR_POWERUP,
@@ -141,6 +151,7 @@
   let mineSerial = 0;
   let armorPowerupSerial = 0;
   let supportTurretSerial = 0;
+  let holographicDecoySerial = 0;
   let terrainSeed = 1;
   let armorPickupSequence = 0;
   let appliedArmorPickupSequence = 0;
@@ -159,23 +170,31 @@
   let localTurretDeploySequence = 0;
   let localArmorDropSequence = 0;
   let localOrbitalSequence = 0;
+  let localDecoyDeploySequence = 0;
+  let nextPlayerStateBuildAt = 0;
+  let nextWorldStateBuildAt = 0;
   let sharedWorldSequence = 0;
   let appliedWorldSequence = -1;
   let sharedPulseSequence = 0;
   let appliedPulseSequence = 0;
+  let decoyExplosionSequence = 0;
+  let appliedDecoyExplosionSequence = 0;
   let sharedGameOver = false;
   let lastLocalShot = {
     x: 0,
     y: 0.86,
     z: 4,
     yaw: 0,
-    tankId: "scout"
+    tankId: "scout",
+    empowered: false
   };
   let lastLocalPulse = { x: 0, z: 4 };
   let lastLocalTurretDeploy = { x: 0, z: 4, heading: 0 };
   let lastLocalArmorDrop = { x: 0, z: 4 };
   let lastLocalOrbital = { x: 0, z: 4, yaw: 0 };
+  let lastLocalDecoy = { x: 0, z: 4, heading: 0 };
   let latestSharedPulse = null;
+  let latestDecoyExplosion = null;
   let recentLocalPulseVisual = null;
   let latestArmorPickup = null;
   let localUpgradeChoice = "";
@@ -196,6 +215,8 @@
   const mines = [];
   const armorPowerups = [];
   const supportTurrets = [];
+  const holographicDecoys = [];
+  const survivalReinforcements = [];
   const particles = [];
   const tankDebris = [];
   const remotePlayers = new Map();
@@ -222,6 +243,7 @@
   };
   let kamikazeWarningTimer = 0;
   let mineWarningTimer = 0;
+  let lastGeneratorShieldToneAt = 0;
   let missionFailureReason = "";
   let defeatedPlayerRole = "";
   let environmentState = {
@@ -239,7 +261,9 @@
     maxHealth: 0,
     shieldTimer: 0,
     timer: 0,
-    targetEnemyId: 0
+    targetEnemyId: 0,
+    reinforcementsPending: 0,
+    nextReinforcementTimer: 0
   };
 
   const player = {
@@ -266,6 +290,10 @@
     scoutTurboTimer: 0,
     scoutTurboCooldown: 0,
     scoutTurboTrailTimer: 0,
+    holographicDecoyCooldown: 0,
+    phaseCloakTimer: 0,
+    phaseCloakCooldown: 0,
+    spectralAmbushTimer: 0,
     score: 0,
     wave: 0,
     kills: 0,
@@ -278,7 +306,19 @@
       armor: Math.max(0, Math.floor(Number(source.armor) || 0)),
       range: Math.max(0, Math.floor(Number(source.range) || 0)),
       systems: Math.max(0, Math.floor(Number(source.systems) || 0)),
-      fireRate: Math.max(0, Math.floor(Number(source.fireRate) || 0))
+      fireRate: Math.max(0, Math.floor(Number(source.fireRate) || 0)),
+      twinCannon: Math.max(
+        0,
+        Math.min(1, Math.floor(Number(source.twinCannon) || 0))
+      ),
+      holographicDecoy: Math.max(
+        0,
+        Math.min(1, Math.floor(Number(source.holographicDecoy) || 0))
+      ),
+      spectralAmbush: Math.max(
+        0,
+        Math.min(1, Math.floor(Number(source.spectralAmbush) || 0))
+      )
     };
   }
 
@@ -306,15 +346,26 @@
     );
   }
 
-  function getUpgradeOptions(tankId) {
+  function isUpgradeAvailableForTank(id, tankId, round) {
+    const upgrade = TANK_UPGRADES[id];
+    if (!upgrade) return false;
+    if (upgrade.tankId && upgrade.tankId !== tankId) return false;
+    return round >= Math.max(0, Number(upgrade.unlockRound) || 0);
+  }
+
+  function getUpgradeOptions(tankId, round = 0) {
     return Object.fromEntries(
       UPGRADE_IDS.map((id) => {
         const upgrade = TANK_UPGRADES[id];
+        const visible = !upgrade.tankId || upgrade.tankId === tankId;
         return [id, {
           label: upgrade.tankLabels?.[tankId] ?? upgrade.label,
           description:
             upgrade.tankDescriptions?.[tankId] ?? upgrade.description,
-          maxLevel: Number(upgrade.maxLevel) || 0
+          maxLevel: Number(upgrade.maxLevel) || 0,
+          unlockRound: Math.max(0, Number(upgrade.unlockRound) || 0),
+          visible,
+          available: visible && isUpgradeAvailableForTank(id, tankId, round)
         }];
       })
     );
@@ -357,14 +408,66 @@
     return getTankStats(player.tankId, getRoleUpgrades(getLocalRole()));
   }
 
+  function getPlayerCannonOffsets(tankId, upgrades) {
+    return tankId === "bastion" && upgrades.twinCannon > 0
+      ? [-0.42, 0.42]
+      : [0];
+  }
+
   function normalizePlayerTankId(tankId) {
-    return ["scout", "bastion", "support"].includes(tankId)
+    return ["scout", "bastion", "support", "spectre"].includes(tankId)
       ? tankId
       : "scout";
   }
 
   function getEnemyType(enemy) {
     return ENEMY_TYPES[enemy.typeId] ?? ENEMY_TYPES.assault;
+  }
+
+  function getActivePowerGenerators() {
+    if (
+      missionState.type !== SCRIPTED_MISSION.GENERATORS ||
+      !missionState.active
+    ) return [];
+    return enemies.filter(
+      (enemy) => getEnemyType(enemy).powerGenerator && enemy.health > 0
+    );
+  }
+
+  function hasActivePowerGenerators() {
+    return (
+      missionState.type === SCRIPTED_MISSION.GENERATORS &&
+      missionState.active &&
+      enemies.some(
+        (enemy) => getEnemyType(enemy).powerGenerator && enemy.health > 0
+      )
+    );
+  }
+
+  function isEnemyProtectedByPowerGenerators(enemy) {
+    return (
+      !getEnemyType(enemy).powerGenerator &&
+      hasActivePowerGenerators()
+    );
+  }
+
+  function absorbPowerGeneratorShield(enemy, impactX, impactZ) {
+    if (!isEnemyProtectedByPowerGenerators(enemy)) return false;
+    const now = performance.now();
+    enemy.generatorShieldFlashUntil = now + 260;
+    burst(
+      Number.isFinite(impactX) ? impactX : enemy.x,
+      Number.isFinite(impactZ) ? impactZ : enemy.z,
+      COLORS.cyan,
+      14,
+      0.55 + (enemy.elevation ?? 0)
+    );
+    screenShake = Math.max(screenShake, 3.5);
+    if (now - lastGeneratorShieldToneAt >= 90) {
+      lastGeneratorShieldToneAt = now;
+      tone(520, 0.08, "square", 0.032, 210);
+    }
+    return true;
   }
 
   function isCoopGame() {
@@ -421,6 +524,10 @@
       scoutTurboTimer: 0,
       scoutTurboCooldown: 0,
       scoutTurboTrailTimer: 0,
+      holographicDecoyCooldown: 0,
+      phaseCloakTimer: 0,
+      phaseCloakCooldown: 0,
+      spectralAmbushTimer: 0,
       invulnerable: Math.max(player.invulnerable, 1.2)
     });
     recenteringTurret = false;
@@ -429,6 +536,7 @@
     mines.length = 0;
     remoteWorldShells.length = 0;
     supportTurrets.length = 0;
+    holographicDecoys.length = 0;
   }
 
   function selectPlayerTank(tankId) {
@@ -504,6 +612,7 @@
         shotZ: Number(state.shotZ) || Number(state.z) || 0,
         shotYaw: Number(state.shotYaw) || 0,
         shotTankId: normalizePlayerTankId(state.shotTankId),
+        shotEmpowered: Boolean(state.shotEmpowered),
         pulseSequence: Number(state.pulseSequence) || 0,
         pulseX: Number(state.pulseX) || Number(state.x) || 0,
         pulseZ: Number(state.pulseZ) || Number(state.z) || 0,
@@ -530,8 +639,17 @@
           ? Number(state.orbitalZ)
           : Number(state.z) || 0,
         orbitalYaw: Number(state.orbitalYaw) || 0,
+        decoyDeploySequence: Number(state.decoyDeploySequence) || 0,
+        decoyX: Number.isFinite(Number(state.decoyX))
+          ? Number(state.decoyX)
+          : Number(state.x) || 0,
+        decoyZ: Number.isFinite(Number(state.decoyZ))
+          ? Number(state.decoyZ)
+          : Number(state.z) || 0,
+        decoyHeading: Number(state.decoyHeading) || 0,
         supportDeployTimer: Math.max(0, Number(state.supportDeployTimer) || 0),
         scoutTurboTimer: Math.max(0, Number(state.scoutTurboTimer) || 0),
+        phaseCloakTimer: Math.max(0, Number(state.phaseCloakTimer) || 0),
         upgradeRound: Math.max(0, Math.floor(Number(state.upgradeRound) || 0)),
         upgradeChoice: UPGRADE_IDS.includes(state.upgradeChoice)
           ? state.upgradeChoice
@@ -546,6 +664,18 @@
         upgradeFireRate: Math.max(
           0,
           Math.floor(Number(state.upgradeFireRate) || 0)
+        ),
+        upgradeTwinCannon: Math.max(
+          0,
+          Math.min(1, Math.floor(Number(state.upgradeTwinCannon) || 0))
+        ),
+        upgradeHolographicDecoy: Math.max(
+          0,
+          Math.min(1, Math.floor(Number(state.upgradeHolographicDecoy) || 0))
+        ),
+        upgradeSpectralAmbush: Math.max(
+          0,
+          Math.min(1, Math.floor(Number(state.upgradeSpectralAmbush) || 0))
         )
       };
       const remote = remotePlayers.get(uid);
@@ -621,6 +751,24 @@
           remote.lastOrbitalSequence ?? 0,
           target.orbitalSequence
         );
+        if (
+          isWorldAuthority() &&
+          target.role !== "host" &&
+          target.tankId === "scout" &&
+          getRoleUpgrades(target.role).holographicDecoy > 0 &&
+          target.decoyDeploySequence > (remote.lastDecoyDeploySequence ?? 0)
+        ) {
+          spawnHolographicDecoy(
+            target.decoyX,
+            target.decoyZ,
+            target.decoyHeading,
+            target.role
+          );
+        }
+        remote.lastDecoyDeploySequence = Math.max(
+          remote.lastDecoyDeploySequence ?? 0,
+          target.decoyDeploySequence
+        );
         remote.target = target;
       } else {
         remotePlayers.set(uid, {
@@ -630,7 +778,8 @@
           lastPulseSequence: target.pulseSequence,
           lastTurretDeploySequence: target.turretDeploySequence,
           lastArmorDropSequence: target.armorDropSequence,
-          lastOrbitalSequence: target.orbitalSequence
+          lastOrbitalSequence: target.orbitalSequence,
+          lastDecoyDeploySequence: target.decoyDeploySequence
         });
       }
     }
@@ -735,11 +884,15 @@
       remote.missionPhase = remote.target.missionPhase;
       remote.supportDeployTimer = remote.target.supportDeployTimer;
       remote.scoutTurboTimer = remote.target.scoutTurboTimer;
+      remote.phaseCloakTimer = remote.target.phaseCloakTimer;
     }
   }
 
-  function publishLocalPlayerState() {
+  function publishLocalPlayerState(force = false) {
     if (playMode === "solo" || !networkSnapshot.connected || !running) return;
+    const now = performance.now();
+    if (!force && now < nextPlayerStateBuildAt) return;
+    nextPlayerStateBuildAt = now + PLAYER_STATE_BUILD_INTERVAL;
     localStateSequence += 1;
     network.sendPlayerState({
       missionId: getCurrentMissionId(),
@@ -758,6 +911,7 @@
       shotZ: lastLocalShot.z,
       shotYaw: lastLocalShot.yaw,
       shotTankId: lastLocalShot.tankId,
+      shotEmpowered: Boolean(lastLocalShot.empowered),
       pulseSequence: localPulseSequence,
       pulseX: lastLocalPulse.x,
       pulseZ: lastLocalPulse.z,
@@ -772,15 +926,25 @@
       orbitalX: lastLocalOrbital.x,
       orbitalZ: lastLocalOrbital.z,
       orbitalYaw: lastLocalOrbital.yaw,
+      decoyDeploySequence: localDecoyDeploySequence,
+      decoyX: lastLocalDecoy.x,
+      decoyZ: lastLocalDecoy.z,
+      decoyHeading: lastLocalDecoy.heading,
       supportDeployTimer: player.supportDeployTimer,
       scoutTurboTimer: player.scoutTurboTimer,
+      phaseCloakTimer: player.phaseCloakTimer,
       upgradeRound: upgradeState.active ? upgradeState.round : 0,
       upgradeChoice: localUpgradeChoice,
       upgradeSpeed: getRoleUpgrades(getLocalRole()).speed,
       upgradeArmor: getRoleUpgrades(getLocalRole()).armor,
       upgradeRange: getRoleUpgrades(getLocalRole()).range,
       upgradeSystems: getRoleUpgrades(getLocalRole()).systems,
-      upgradeFireRate: getRoleUpgrades(getLocalRole()).fireRate
+      upgradeFireRate: getRoleUpgrades(getLocalRole()).fireRate,
+      upgradeTwinCannon: getRoleUpgrades(getLocalRole()).twinCannon,
+      upgradeHolographicDecoy:
+        getRoleUpgrades(getLocalRole()).holographicDecoy,
+      upgradeSpectralAmbush:
+        getRoleUpgrades(getLocalRole()).spectralAmbush
     });
   }
 
@@ -856,7 +1020,7 @@
       roleCount: roles.length,
       coop: isCoopGame(),
       tankLabel: (PLAYER_TANKS[player.tankId] ?? PLAYER_TANKS.scout).label,
-      upgradeOptions: getUpgradeOptions(player.tankId)
+      upgradeOptions: getUpgradeOptions(player.tankId, upgradeState.round)
     });
   }
 
@@ -937,7 +1101,15 @@
         maxHealth: Math.max(0, Number(sharedMission.maxHealth) || 0),
         shieldTimer: Math.max(0, Number(sharedMission.shieldTimer) || 0),
         timer: Math.max(0, Number(sharedMission.timer) || 0),
-        targetEnemyId: Number(sharedMission.targetEnemyId) || 0
+        targetEnemyId: Number(sharedMission.targetEnemyId) || 0,
+        reinforcementsPending: Math.max(
+          0,
+          Math.floor(Number(sharedMission.reinforcementsPending) || 0)
+        ),
+        nextReinforcementTimer: Math.max(
+          0,
+          Number(sharedMission.nextReinforcementTimer) || 0
+        )
       };
     }
     const sharedEnvironment = world.environment;
@@ -1016,6 +1188,60 @@
         burst(target.x, target.z, COLORS.amber, 7, 0.55);
       }
       Object.assign(turret, target);
+    }
+
+    const incomingHolographicDecoys = firebaseValues(world.holographicDecoys)
+      .map((decoy) => ({
+        id: Number(decoy.id),
+        kind: "holographicDecoy",
+        ownerRole: String(decoy.ownerRole || "host"),
+        x: Number(decoy.x),
+        z: Number(decoy.z),
+        heading: Number(decoy.heading) || 0,
+        health: Math.max(0, Number(decoy.health) || 0),
+        maxHealth: Math.max(1, Number(decoy.maxHealth) || HOLOGRAPHIC_DECOY.HEALTH),
+        life: Math.max(0, Number(decoy.life) || 0),
+        maxLife: HOLOGRAPHIC_DECOY.LIFETIME,
+        hitFlash: Math.max(0, Number(decoy.hitFlash) || 0)
+      }))
+      .filter(
+        (decoy) =>
+          Number.isFinite(decoy.id) &&
+          Number.isFinite(decoy.x) &&
+          Number.isFinite(decoy.z)
+      );
+    const incomingHolographicDecoyIds = new Set(
+      incomingHolographicDecoys.map((decoy) => decoy.id)
+    );
+    for (let index = holographicDecoys.length - 1; index >= 0; index -= 1) {
+      if (!incomingHolographicDecoyIds.has(Number(holographicDecoys[index].id))) {
+        holographicDecoys.splice(index, 1);
+      }
+    }
+    for (const target of incomingHolographicDecoys) {
+      const decoy = holographicDecoys.find(
+        (candidate) => Number(candidate.id) === target.id
+      );
+      if (!decoy) {
+        holographicDecoys.push(target);
+        continue;
+      }
+      if (target.health < decoy.health) {
+        decoy.hitFlash = 0.2;
+        burst(target.x, target.z, COLORS.cyan, 9, 0.55);
+      }
+      Object.assign(decoy, target);
+    }
+
+    const incomingDecoyExplosion = world.decoyExplosion;
+    const incomingDecoyExplosionSequence =
+      Number(incomingDecoyExplosion?.sequence) || 0;
+    if (incomingDecoyExplosionSequence > appliedDecoyExplosionSequence) {
+      appliedDecoyExplosionSequence = incomingDecoyExplosionSequence;
+      createHolographicDecoyExplosionEffects(
+        Number(incomingDecoyExplosion.x),
+        Number(incomingDecoyExplosion.z)
+      );
     }
 
     const incomingMines = firebaseValues(world.mines)
@@ -1109,10 +1335,18 @@
             burst(
               enemies[i].x,
               enemies[i].z,
-              removedType.priority ? COLORS.amber : COLORS.red,
-              24,
+              removedType.powerGenerator
+                ? COLORS.cyan
+                : removedType.priority
+                  ? COLORS.amber
+                  : COLORS.red,
+              removedType.powerGenerator ? 42 : 24,
               0.4 + (enemies[i].elevation ?? 0)
             );
+            if (removedType.powerGenerator) {
+              burst(enemies[i].x, enemies[i].z, COLORS.amber, 22, 0.65);
+              tone(310, 0.16, "square", 0.035, -140);
+            }
             playTankExplosionSound(enemies[i].x, enemies[i].z);
           }
         }
@@ -1145,6 +1379,11 @@
         fuseTimer: Math.max(0, Number(snapshot.fuseTimer) || 0),
         fuseDuration: Number(snapshot.fuseDuration) || KAMIKAZE_FUSE_TIME,
         elevation: Math.max(0, Number(snapshot.elevation) || 0),
+        reinforcementDrop: Boolean(snapshot.reinforcementDrop),
+        dropTargetElevation: Math.max(
+          0,
+          Number(snapshot.dropTargetElevation) || 0
+        ),
         flightState: snapshot.flightState || null,
         flightTimer: Math.max(0, Number(snapshot.flightTimer) || 0),
         attackCooldown: Math.max(0, Number(snapshot.attackCooldown) || 0),
@@ -1269,6 +1508,12 @@
       enemy.revealTimer = Math.max(0, (enemy.revealTimer ?? 0) - dt);
       enemy.revealFlash = Math.max(0, (enemy.revealFlash ?? 0) - dt);
       enemy.kamikazeArmed = Boolean(target.kamikazeArmed);
+      const wasReinforcementDropping = Boolean(enemy.reinforcementDrop);
+      enemy.reinforcementDrop = Boolean(target.reinforcementDrop);
+      enemy.dropTargetElevation = target.dropTargetElevation;
+      if (wasReinforcementDropping && !enemy.reinforcementDrop) {
+        createSurvivalReinforcementLandingEffects(enemy);
+      }
       enemy.flightState = target.flightState;
       enemy.flightTimer = target.flightTimer;
       enemy.attackCooldown = target.attackCooldown;
@@ -1301,6 +1546,7 @@
         delay: target.delay,
         orbital: Boolean(target.orbital),
         mortar: Boolean(target.mortar),
+        spectralAmbush: Boolean(target.spectralAmbush),
         ownerRole: target.ownerRole,
         blastRadius: target.blastRadius,
         blastDamage: target.blastDamage
@@ -1336,6 +1582,10 @@
           (enemy.fuseDuration ?? KAMIKAZE_FUSE_TIME).toFixed(3)
         ),
         elevation: Number((enemy.elevation ?? 0).toFixed(3)),
+        reinforcementDrop: Boolean(enemy.reinforcementDrop),
+        dropTargetElevation: Number(
+          (enemy.dropTargetElevation ?? 0).toFixed(3)
+        ),
         flightState: enemy.flightState ?? "",
         flightTimer: Number((enemy.flightTimer ?? 0).toFixed(3)),
         attackCooldown: Number((enemy.attackCooldown ?? 0).toFixed(3)),
@@ -1356,7 +1606,8 @@
         vx: Number((shell.vx ?? 0).toFixed(3)),
         vz: Number((shell.vz ?? 0).toFixed(3)),
         life: Number(shell.life.toFixed(3)),
-        delay: Number((shell.delay ?? 0).toFixed(3))
+        delay: Number((shell.delay ?? 0).toFixed(3)),
+        spectralAmbush: Boolean(shell.spectralAmbush)
       };
       if (shell.kind === "artillery") {
         Object.assign(state, {
@@ -1400,6 +1651,21 @@
       };
     }
 
+    const holographicDecoyStates = {};
+    for (const decoy of holographicDecoys) {
+      holographicDecoyStates[`d${decoy.id}`] = {
+        id: decoy.id,
+        ownerRole: decoy.ownerRole,
+        x: Number(decoy.x.toFixed(3)),
+        z: Number(decoy.z.toFixed(3)),
+        heading: Number(decoy.heading.toFixed(4)),
+        health: decoy.health,
+        maxHealth: decoy.maxHealth,
+        life: Number(decoy.life.toFixed(3)),
+        hitFlash: Number((decoy.hitFlash ?? 0).toFixed(3))
+      };
+    }
+
     const mineStates = {};
     for (const mine of mines) {
       mineStates[`m${mine.id}`] = {
@@ -1438,6 +1704,7 @@
       },
       pulse: latestSharedPulse,
       armorPickup: latestArmorPickup,
+      decoyExplosion: latestDecoyExplosion,
       upgrade: {
         active: upgradeState.active,
         round: upgradeState.round,
@@ -1459,7 +1726,14 @@
         maxHealth: Math.max(0, Math.round(missionState.maxHealth ?? 0)),
         shieldTimer: Number((missionState.shieldTimer ?? 0).toFixed(3)),
         timer: Number((missionState.timer ?? 0).toFixed(3)),
-        targetEnemyId: Number(missionState.targetEnemyId) || 0
+        targetEnemyId: Number(missionState.targetEnemyId) || 0,
+        reinforcementsPending: Math.max(
+          0,
+          Math.floor(Number(missionState.reinforcementsPending) || 0)
+        ),
+        nextReinforcementTimer: Number(
+          (missionState.nextReinforcementTimer ?? 0).toFixed(3)
+        )
       },
       environment: {
         type: environmentState.type,
@@ -1472,12 +1746,16 @@
       mines: mineStates,
       armorPowerups: armorPowerupStates,
       supportTurrets: supportTurretStates,
+      holographicDecoys: holographicDecoyStates,
       updatedAt: Date.now()
     };
   }
 
-  function publishSharedWorld() {
+  function publishSharedWorld(force = false) {
     if (!isCoopGame() || networkSnapshot.role !== "host") return;
+    const now = performance.now();
+    if (!force && now < nextWorldStateBuildAt) return;
+    nextWorldStateBuildAt = now + WORLD_STATE_BUILD_INTERVAL;
     network.sendWorldState(buildSharedWorld());
   }
 
@@ -2618,6 +2896,64 @@
     line3d(barrelStart, barrelEnd, color, 2.4, fade);
   }
 
+  function drawPowerGenerator(enemy, type, color, fade) {
+    const scale = type.scale;
+    const time = performance.now();
+    const pulse = 0.72 + Math.sin(time * 0.011 + enemy.id) * 0.2;
+    drawBox(enemy, [1.18 * scale, 0.34 * scale, 1.02 * scale], enemy.heading, color, fade);
+
+    const coreBottom = { x: enemy.x, y: 0.3 * scale, z: enemy.z };
+    const coreTop = { x: enemy.x, y: 2.15 * scale, z: enemy.z };
+    drawTankEdge(coreBottom, coreTop, COLORS.cyan, fade * pulse, 2.1);
+
+    for (const sideX of [-0.72, 0.72]) {
+      for (const sideZ of [-0.58, 0.58]) {
+        const base = orientedPoint(
+          enemy,
+          sideX * scale,
+          0.26 * scale,
+          sideZ * scale,
+          enemy.heading
+        );
+        const top = { ...base, y: 1.68 * scale };
+        drawTankEdge(base, top, color, fade * 0.88, 1.35);
+        drawTankEdge(top, coreTop, COLORS.cyan, fade * pulse * 0.75, 1.05);
+      }
+    }
+
+    for (const [height, radius] of [[0.82, 0.68], [1.38, 0.82], [1.94, 0.58]]) {
+      const segments = 12;
+      for (let index = 0; index < segments; index += 1) {
+        const angleA = index / segments * TAU + time * 0.00045;
+        const angleB = (index + 1) / segments * TAU + time * 0.00045;
+        drawTankEdge(
+          {
+            x: enemy.x + Math.sin(angleA) * radius * scale,
+            y: height * scale,
+            z: enemy.z + Math.cos(angleA) * radius * scale
+          },
+          {
+            x: enemy.x + Math.sin(angleB) * radius * scale,
+            y: height * scale,
+            z: enemy.z + Math.cos(angleB) * radius * scale
+          },
+          COLORS.cyan,
+          fade * pulse,
+          1.25
+        );
+      }
+    }
+
+    const beamHeight = 2.65 + Math.sin(time * 0.009 + enemy.id) * 0.18;
+    drawTankEdge(
+      coreTop,
+      { x: enemy.x, y: beamHeight * scale, z: enemy.z },
+      COLORS.cyan,
+      fade * pulse * 0.65,
+      1.2
+    );
+  }
+
   function drawHangarEnemy(enemy, type, color, fade) {
     const scale = type.scale;
     const pulse = 0.62 + Math.sin(performance.now() * 0.008 + enemy.id) * 0.22;
@@ -2874,12 +3210,90 @@
     }
   }
 
+  function drawPowerGeneratorMissionShield(enemy, fade) {
+    if (!isEnemyProtectedByPowerGenerators(enemy)) return;
+    const type = getEnemyType(enemy);
+    const now = performance.now();
+    const flash = Math.max(
+      0,
+      Math.min(1, ((enemy.generatorShieldFlashUntil ?? 0) - now) / 260)
+    );
+    const pulse = 1 + Math.sin(now * 0.006 + enemy.id) * 0.045;
+    const radius = 1.5 * type.scale * pulse;
+    const centerY = 0.82 * type.scale;
+    const alpha = fade * (0.16 + flash * 0.5);
+    const segments = 8;
+    const top = {
+      x: enemy.x,
+      y: centerY + 1.05 * type.scale,
+      z: enemy.z
+    };
+    const bottom = { x: enemy.x, y: 0.04, z: enemy.z };
+    const ring = [];
+    for (let index = 0; index < segments; index += 1) {
+      const angle = index / segments * TAU;
+      ring.push({
+        x: enemy.x + Math.sin(angle) * radius,
+        y: centerY,
+        z: enemy.z + Math.cos(angle) * radius
+      });
+    }
+    for (let index = 0; index < segments; index += 1) {
+      drawTankEdge(
+        ring[index],
+        ring[(index + 1) % segments],
+        COLORS.cyan,
+        alpha,
+        1.05
+      );
+      if (index % 2 === 0 || flash > 0) {
+        drawTankEdge(ring[index], top, COLORS.cyan, alpha, 0.85);
+        drawTankEdge(ring[index], bottom, COLORS.cyan, alpha, 0.85);
+      }
+    }
+  }
+
   function getEnemyVisibility(enemy) {
+    if (enemy.reinforcementDrop) return 0.86;
     if (getEnemyType(enemy).id !== "ghost") return 1;
     const revealTimer = Math.max(0, enemy.revealTimer ?? 0);
     if (revealTimer <= 0) return 0;
     const fadeProgress = Math.min(1, revealTimer / 1.65);
     return Math.pow(fadeProgress, 1.45);
+  }
+
+  function drawSurvivalReinforcementDrop(enemy, fade) {
+    if (!enemy.reinforcementDrop) return;
+    const pulse = 0.5 + Math.sin(performance.now() * 0.012) * 0.5;
+    const radius = 2.1 + pulse * 0.65;
+    const segments = 12;
+    const groundY = 0.035;
+    for (let index = 0; index < segments; index += 1) {
+      const angleA = index / segments * TAU;
+      const angleB = (index + 1) / segments * TAU;
+      line3d(
+        {
+          x: enemy.x + Math.sin(angleA) * radius,
+          y: groundY,
+          z: enemy.z + Math.cos(angleA) * radius
+        },
+        {
+          x: enemy.x + Math.sin(angleB) * radius,
+          y: groundY,
+          z: enemy.z + Math.cos(angleB) * radius
+        },
+        COLORS.amber,
+        1.35,
+        fade * (0.5 + pulse * 0.35)
+      );
+    }
+    line3d(
+      { x: enemy.x, y: groundY, z: enemy.z },
+      { x: enemy.x, y: enemy.elevation ?? 0, z: enemy.z },
+      COLORS.amber,
+      1,
+      fade * 0.42
+    );
   }
 
   function getEnemyLinePulse(enemy, type) {
@@ -2989,6 +3403,8 @@
         ? color
         : modulateLineColor(color, getEnemyLinePulse(enemy, type));
 
+    drawSurvivalReinforcementDrop(enemy, fade);
+
     if (type.train) {
       drawArmoredTrain(enemy, modelColor, fade);
     } else if (type.id === "guardian") {
@@ -3000,14 +3416,17 @@
       drawDroneEnemy(enemy, type, modelColor, fade);
     } else if (type.id === "artillery") {
       drawArtilleryEnemy(enemy, modelColor, fade);
+    } else if (type.powerGenerator) {
+      drawPowerGenerator(enemy, type, modelColor, fade);
     } else if (type.hangar || type.objectiveBuilding) {
       drawHangarEnemy(enemy, type, modelColor, fade);
     } else {
       drawMobileEnemy(enemy, type, modelColor, fade);
     }
     drawEnemyShield(enemy, fade);
+    drawPowerGeneratorMissionShield(enemy, fade);
 
-    const majorTarget = type.boss || type.train;
+    const majorTarget = type.boss || type.train || type.powerGenerator;
     const labelRange = majorTarget ? 100 : type.priority ? 60 : 42;
     if (centerProjection.depth >= labelRange) return;
 
@@ -3018,8 +3437,12 @@
     ctx.textAlign = "center";
     ctx.fillStyle = color;
     ctx.globalAlpha = fade * environmentVisibility * 0.88;
+    const altitudeLabel =
+      (type.airborne || enemy.reinforcementDrop) && (enemy.elevation ?? 0) > 0.2
+        ? `  ALT ${Math.round(enemy.elevation * 10)}m`
+        : "";
     ctx.fillText(
-      `${type.code}-${String(enemy.id).padStart(2, "0")} ${type.label}  ${Math.round(range * 10)}m${type.airborne && (enemy.elevation ?? 0) > 0.2 ? `  ALT ${Math.round(enemy.elevation * 10)}m` : ""}`,
+      `${type.code}-${String(enemy.id).padStart(2, "0")} ${type.label}  ${Math.round(range * 10)}m${enemy.reinforcementDrop ? "  LARGAGE" : ""}${altitudeLabel}`,
       centerProjection.x,
       labelY
     );
@@ -3029,7 +3452,9 @@
       const priorityColor = bossEnraged ? COLORS.red : COLORS.amber;
       ctx.fillStyle = priorityColor;
       ctx.fillText(
-        type.train
+        type.powerGenerator
+          ? "▲ GÉNÉRATEUR DE BOUCLIER ▲"
+          : type.train
           ? "▲ OBJECTIF MOBILE ▲"
           : type.boss
           ? bossEnraged
@@ -3090,7 +3515,17 @@
     if (environmentVisibility <= 0.015) return;
     const tank = PLAYER_TANKS[remote.tankId] ?? PLAYER_TANKS.scout;
     const scale =
-      remote.tankId === "bastion" ? 1.08 : remote.tankId === "support" ? 0.96 : 0.84;
+      remote.tankId === "bastion"
+        ? 1.08
+        : remote.tankId === "support"
+          ? 0.96
+          : remote.tankId === "spectre"
+            ? 0.9
+            : 0.84;
+    const cloakActive = remote.tankId === "spectre" && remote.phaseCloakTimer > 0;
+    const cloakFade = cloakActive
+      ? 0.18 + Math.sin(performance.now() * 0.024) * 0.045
+      : 0.92;
     const model = {
       ...remote,
       elevation: remote.altitude,
@@ -3101,9 +3536,15 @@
     }
     drawMobileEnemy(
       model,
-      { id: remote.tankId === "scout" ? "light" : "assault", scale },
+      {
+        id: ["scout", "spectre"].includes(remote.tankId) ? "light" : "assault",
+        scale,
+        twinCannon:
+          remote.tankId === "bastion" &&
+          getRoleUpgrades(remote.role).twinCannon > 0
+      },
       COLORS.cyan,
-      0.92
+      cloakFade
     );
     if (remote.tankId === "support") {
       const pack = orientedPoint(model, 0, 0, -0.92, remote.heading);
@@ -3128,6 +3569,8 @@
       ? " // DEPLOIEMENT"
       : remote.tankId === "scout" && remote.scoutTurboTimer > 0
         ? " // TURBO"
+        : cloakActive
+          ? " // CAMOUFLAGE"
         : "";
     ctx.save();
     ctx.fillStyle = COLORS.cyan;
@@ -3210,6 +3653,43 @@
     ctx.restore();
   }
 
+  function drawHolographicDecoy(decoy) {
+    const flicker = Math.sin(performance.now() * 0.027 + decoy.id * 1.7);
+    const color = decoy.hitFlash > 0 ? COLORS.white : COLORS.cyan;
+    const fade = Math.max(0.28, 0.56 + flicker * 0.13);
+    const model = {
+      ...decoy,
+      elevation: 0,
+      turretHeading: decoy.heading
+    };
+    drawMobileEnemy(model, { id: "light", scale: 0.84 }, color, fade);
+
+    const marker = project({ x: decoy.x, y: 1.42, z: decoy.z });
+    if (!marker || marker.depth >= 50) return;
+    const lifeSeconds = Math.max(0, Math.ceil(decoy.life));
+    const health = Math.max(0, Math.ceil(decoy.health));
+    ctx.save();
+    ctx.globalAlpha = renderEnvironmentVisibility * (0.72 + flicker * 0.12);
+    ctx.fillStyle = color;
+    ctx.strokeStyle = color;
+    ctx.font = "bold 8px Courier New";
+    ctx.textAlign = "center";
+    ctx.fillText(
+      `LEURRE ${health}/${decoy.maxHealth} // ${lifeSeconds}s`,
+      marker.x,
+      marker.y
+    );
+    const barWidth = Math.min(42, 210 / marker.depth);
+    ctx.strokeRect(marker.x - barWidth / 2, marker.y + 5, barWidth, 3);
+    ctx.fillRect(
+      marker.x - barWidth / 2,
+      marker.y + 5,
+      barWidth * Math.max(0, Math.min(1, decoy.health / decoy.maxHealth)),
+      3
+    );
+    ctx.restore();
+  }
+
   function drawArtilleryTarget(shell) {
     const timeLeft = Math.max(
       0,
@@ -3284,7 +3764,9 @@
       artillery ? 2.4 : 1.4,
       Math.min(artillery ? 10 : 7, (artillery ? 26 : 18) / p.depth)
     );
-    const color = shell.orbital
+    const color = shell.spectralAmbush
+      ? COLORS.violet
+      : shell.orbital
       ? COLORS.cyan
       : shell.owner === "support"
       ? COLORS.cyan
@@ -4000,30 +4482,41 @@
     ctx.lineTo(hullRearCenter.x, hullRearCenter.y);
     ctx.stroke();
 
-    // Canon vu dans l'axe : le tube converge vers une petite bouche carrée.
+    // Canon vu dans l'axe : chaque tube converge vers une petite bouche carrée.
     const barrelBaseY = baseY - (light ? 13 : 16);
     const barrelEndY = shoulderY - (light ? 72 : 94);
     const barrelBaseHalf = light ? 8 : 11;
     const barrelEndHalf = light ? 2.5 : 3.5;
+    const twinCannon =
+      tank.id === "bastion" && getRoleUpgrades(getLocalRole()).twinCannon > 0;
+    const barrelMounts = twinCannon
+      ? [
+          { baseX: midX - 20, endX: midX - 11 },
+          { baseX: midX + 20, endX: midX + 11 }
+        ]
+      : [{ baseX: midX, endX: midX }];
 
     ctx.fillStyle = dark;
     ctx.globalAlpha = 1;
-    ctx.beginPath();
-    ctx.moveTo(midX - barrelBaseHalf, barrelBaseY);
-    ctx.lineTo(midX - barrelEndHalf, barrelEndY);
-    ctx.lineTo(midX + barrelEndHalf, barrelEndY);
-    ctx.lineTo(midX + barrelBaseHalf, barrelBaseY);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
+    for (const mount of barrelMounts) {
+      ctx.beginPath();
+      ctx.moveTo(mount.baseX - barrelBaseHalf, barrelBaseY);
+      ctx.lineTo(mount.endX - barrelEndHalf, barrelEndY);
+      ctx.lineTo(mount.endX + barrelEndHalf, barrelEndY);
+      ctx.lineTo(mount.baseX + barrelBaseHalf, barrelBaseY);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
 
-    ctx.globalAlpha = 0.72;
-    ctx.strokeRect(
-      midX - barrelEndHalf - 2,
-      barrelEndY - 3,
-      barrelEndHalf * 2 + 4,
-      5
-    );
+      ctx.globalAlpha = 0.72;
+      ctx.strokeRect(
+        mount.endX - barrelEndHalf - 2,
+        barrelEndY - 3,
+        barrelEndHalf * 2 + 4,
+        5
+      );
+      ctx.globalAlpha = 1;
+    }
 
     // Mantelet technique à la base du canon.
     const grilleTop = baseY - (light ? 31 : 39);
@@ -4603,6 +5096,63 @@
         sideWidth + (compact ? 5 : 12),
         compact ? 32 : 43
       );
+      if (getRoleUpgrades(getLocalRole()).holographicDecoy > 0) {
+        const activeDecoy = holographicDecoys.find(
+          (decoy) =>
+            decoy.ownerRole === getLocalRole() &&
+            decoy.health > 0 &&
+            decoy.life > 0
+        );
+        const decoyStatus = activeDecoy
+          ? `ACTIF ${Math.ceil(activeDecoy.life)}s`
+          : player.holographicDecoyCooldown <= 0
+            ? "PRET"
+            : `${Math.ceil(player.holographicDecoyCooldown)}s`;
+        ctx.fillStyle = activeDecoy || player.holographicDecoyCooldown <= 0
+          ? COLORS.cyan
+          : COLORS.dim;
+        ctx.fillText(
+          compact ? `E LEU ${decoyStatus}` : `E LEURRE // ${decoyStatus}`,
+          sideWidth + (compact ? 5 : 12),
+          compact ? 42 : 56
+        );
+      }
+      if (getRoleUpgrades(getLocalRole()).twinCannon > 0) {
+        ctx.fillStyle = COLORS.amber;
+        ctx.fillText(
+          compact ? "2X CANON ACTIF" : "CANON JUMELÉ // ACTIF",
+          sideWidth + (compact ? 5 : 12),
+          compact ? 42 : 56
+        );
+      }
+    }
+    if (tank.id === "spectre") {
+      const cloakStatus = player.phaseCloakTimer > 0
+        ? `ACTIF ${player.phaseCloakTimer.toFixed(1)}s`
+        : player.phaseCloakCooldown <= 0
+          ? "PRET"
+          : `${Math.ceil(player.phaseCloakCooldown)}s`;
+      ctx.fillStyle = player.phaseCloakTimer > 0 || player.phaseCloakCooldown <= 0
+        ? COLORS.cyan
+        : COLORS.dim;
+      ctx.fillText(
+        compact ? `Q CAM ${cloakStatus}` : `Q CAMOUFLAGE // ${cloakStatus}`,
+        sideWidth + (compact ? 5 : 12),
+        compact ? 32 : 43
+      );
+      if (getRoleUpgrades(getLocalRole()).spectralAmbush > 0) {
+        const ambushStatus = player.spectralAmbushTimer > 0
+          ? `CHARGÉ ${player.spectralAmbushTimer.toFixed(1)}s`
+          : "EN ATTENTE";
+        ctx.fillStyle = player.spectralAmbushTimer > 0
+          ? COLORS.violet
+          : COLORS.dim;
+        ctx.fillText(
+          compact ? `TIR 2X ${ambushStatus}` : `EMBUSCADE // ${ambushStatus}`,
+          sideWidth + (compact ? 5 : 12),
+          compact ? 42 : 56
+        );
+      }
     }
     ctx.fillStyle = COLORS.green;
     ctx.textAlign = "center";
@@ -4772,6 +5322,72 @@
       );
       ctx.restore();
     }
+    if (player.phaseCloakTimer > 0) {
+      const progress = Math.max(
+        0,
+        Math.min(1, player.phaseCloakTimer / PHASE_CLOAK.DURATION)
+      );
+      const barWidth = Math.min(250, width * 0.4);
+      const barY = Math.min(consoleTop - 38, height * 0.68);
+      ctx.save();
+      ctx.globalAlpha = 0.18 + Math.sin(performance.now() * 0.021) * 0.05;
+      ctx.fillStyle = COLORS.cyan;
+      for (let y = 9; y < height - 9; y += 18) {
+        const offset = ((y * 17 + performance.now() * 0.06) % 31) - 15;
+        ctx.fillRect(8 + offset, y, 20, 1);
+        ctx.fillRect(width - 28 - offset, y + 7, 20, 1);
+      }
+      ctx.strokeStyle = COLORS.cyan;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(7, 7, width - 14, height - 14);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = "rgba(1, 7, 9, 0.84)";
+      ctx.lineWidth = 1;
+      ctx.fillRect(width / 2 - barWidth / 2, barY, barWidth, 24);
+      ctx.strokeRect(width / 2 - barWidth / 2, barY, barWidth, 24);
+      ctx.globalAlpha = 0.8;
+      ctx.fillStyle = COLORS.cyan;
+      ctx.fillRect(width / 2 - barWidth / 2 + 4, barY + 17, (barWidth - 8) * progress, 3);
+      ctx.globalAlpha = 1;
+      ctx.font = "bold 9px Courier New";
+      ctx.textAlign = "center";
+      ctx.fillText(
+        `CAMOUFLAGE DE PHASE // ${player.phaseCloakTimer.toFixed(1)}s`,
+        width / 2,
+        barY + 11
+      );
+      ctx.restore();
+    }
+    if (player.spectralAmbushTimer > 0) {
+      const progress = Math.max(
+        0,
+        Math.min(1, player.spectralAmbushTimer / PHASE_CLOAK.AMBUSH_DURATION)
+      );
+      const barWidth = Math.min(290, width * 0.46);
+      const barY = Math.min(consoleTop - 38, height * 0.68);
+      ctx.save();
+      ctx.globalAlpha = 0.16 + Math.sin(performance.now() * 0.025) * 0.05;
+      ctx.fillStyle = COLORS.violet;
+      ctx.fillRect(7, 7, width - 14, 2);
+      ctx.fillRect(7, height - 9, width - 14, 2);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = "rgba(8, 3, 12, 0.88)";
+      ctx.strokeStyle = COLORS.violet;
+      ctx.fillRect(width / 2 - barWidth / 2, barY, barWidth, 24);
+      ctx.strokeRect(width / 2 - barWidth / 2, barY, barWidth, 24);
+      ctx.globalAlpha = 0.85;
+      ctx.fillStyle = COLORS.violet;
+      ctx.fillRect(width / 2 - barWidth / 2 + 4, barY + 17, (barWidth - 8) * progress, 3);
+      ctx.globalAlpha = 1;
+      ctx.font = "bold 9px Courier New";
+      ctx.textAlign = "center";
+      ctx.fillText(
+        `EMBUSCADE SPECTRALE // TIR CHARGÉ ${player.spectralAmbushTimer.toFixed(1)}s`,
+        width / 2,
+        barY + 11
+      );
+      ctx.restore();
+    }
     ctx.restore();
   }
 
@@ -4890,6 +5506,45 @@
       const remaining = mines.filter((mine) => !mine.detonated).length;
       color = remaining > 0 ? COLORS.amber : COLORS.green;
       label = `CHAMP DE MINES // ${remaining} MINE${remaining === 1 ? "" : "S"} // ÉLIMINER LA VAGUE`;
+    } else if (missionState.type === SCRIPTED_MISSION.SURVIVAL) {
+      const remainingSeconds = Math.max(0, Math.ceil(missionState.timer));
+      const minutes = Math.floor(remainingSeconds / 60);
+      const seconds = remainingSeconds % 60;
+      const clock = `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+      const pending = Math.max(0, missionState.reinforcementsPending || 0);
+      progress = missionState.completed
+        ? 1
+        : Math.max(
+            0,
+            Math.min(1, missionState.timer / SCRIPTED_MISSION.SURVIVAL_TIME)
+          );
+      color = missionState.completed
+        ? COLORS.green
+        : missionState.timer <= 20
+          ? COLORS.red
+          : COLORS.amber;
+      label = missionState.completed
+        ? "SURVIE RÉUSSIE // SECTEUR SÉCURISÉ"
+        : `SURVIE ${clock} // ${enemies.length} HOSTILE${enemies.length === 1 ? "" : "S"}`;
+      if (!missionState.completed && pending > 0) {
+        label += ` // R+${pending} ${missionState.nextReinforcementTimer.toFixed(1)}s`;
+      }
+    } else if (missionState.type === SCRIPTED_MISSION.GENERATORS) {
+      const generators = getActivePowerGenerators();
+      const remaining = generators.length;
+      const remainingHealthRatio = generators.reduce(
+        (sum, generator) =>
+          sum +
+          (generator.maxHealth > 0
+            ? Math.max(0, Math.min(1, generator.health / generator.maxHealth))
+            : 0),
+        0
+      );
+      color = remaining > 0 ? COLORS.amber : COLORS.green;
+      label = remaining > 0
+        ? `BOUCLIER ENNEMI ACTIF // ${remaining}/2 GÉNÉRATEUR${remaining === 1 ? "" : "S"}`
+        : "BOUCLIER NEUTRALISÉ // ÉLIMINER LA VAGUE";
+      progress = Math.max(0, Math.min(1, remainingHealthRatio / 2));
     } else if (missionState.type === SCRIPTED_MISSION.DEMOLITION) {
       const building = enemies.find(
         (enemy) => Number(enemy.id) === Number(missionState.targetEnemyId)
@@ -5097,6 +5752,10 @@
         depth: distance(player, turret),
         draw: () => drawSupportTurret(turret)
       })),
+      ...holographicDecoys.map((decoy) => ({
+        depth: distance(player, decoy),
+        draw: () => drawHolographicDecoy(decoy)
+      })),
       ...armorPowerups.map((powerup) => ({
         depth: distance(player, powerup),
         draw: () => drawArmorPowerup(powerup)
@@ -5196,6 +5855,8 @@
       ? Math.max(0, networkSnapshot.playerCount - 1) *
         TRAIN_MISSION.HEALTH_PER_EXTRA_PLAYER
       : 0;
+    const reinforcementDrop = Boolean(options.reinforcementDrop);
+    const dropTargetElevation = type.airborne ? DRONE_CRUISE_ALTITUDE : 0;
     const health =
       type.health +
       assaultBonus +
@@ -5249,7 +5910,11 @@
       kamikazeArmed: false,
       fuseTimer: 0,
       fuseDuration: KAMIKAZE_FUSE_TIME,
-      elevation: type.airborne ? DRONE_CRUISE_ALTITUDE : 0,
+      elevation: reinforcementDrop
+        ? SCRIPTED_MISSION.SURVIVAL_DROP_HEIGHT
+        : dropTargetElevation,
+      reinforcementDrop,
+      dropTargetElevation,
       flightState: type.airborne ? DRONE_FLIGHT_STATE.CRUISING : null,
       flightTimer: 0,
       attackCooldown: type.airborne ? 1.5 + Math.random() * 2.2 : 0,
@@ -5391,6 +6056,43 @@
     missionState.x = train.x;
     missionState.z = train.z;
     return train;
+  }
+
+  function findPowerGeneratorSpawn(side, index) {
+    const type = ENEMY_TYPES.powerGenerator;
+    const baseX = Math.min(
+      WORLD_LIMIT - 7,
+      SCRIPTED_MISSION.GENERATOR_X
+    );
+    const baseZ = side * SCRIPTED_MISSION.GENERATOR_Z_OFFSET;
+    const offsets = [
+      [0, 0],
+      [-6, 0],
+      [0, -side * 6],
+      [-6, -side * 6],
+      [4, 0],
+      [-12, 0],
+      [-10, -side * 8]
+    ];
+    for (const [offsetX, offsetZ] of offsets) {
+      const position = {
+        x: Math.max(-WORLD_LIMIT + 6, Math.min(WORLD_LIMIT - 6, baseX + offsetX)),
+        z: Math.max(-WORLD_LIMIT + 6, Math.min(WORLD_LIMIT - 6, baseZ + offsetZ))
+      };
+      if (isEnemySpawnClear(position, type)) return position;
+    }
+    return findEnemySpawn(type, index);
+  }
+
+  function spawnPowerGenerators() {
+    for (const [index, side] of [-1, 1].entries()) {
+      const generator = createEnemy(
+        ENEMY_TYPES.powerGenerator,
+        findPowerGeneratorSpawn(side, index + 20),
+        { heading: -Math.PI / 2 }
+      );
+      enemies.push(generator);
+    }
   }
 
   function findArmorPowerupSpawn() {
@@ -5556,6 +6258,7 @@
 
   function spawnWave() {
     mines.length = 0;
+    survivalReinforcements.length = 0;
     player.wave += 1;
     resetLocalPlayerForWave();
     const wavePlan = createWavePlan(player.wave, {
@@ -5590,6 +6293,9 @@
       missionState.targetEnemyId = building.id;
       enemies.push(building);
     }
+    if (missionState.type === SCRIPTED_MISSION.GENERATORS) {
+      spawnPowerGenerators();
+    }
     if (wavePlan.spawnHangar) {
       const hangarPosition = findEnemySpawn(ENEMY_TYPES.hangar, count + 3);
       enemies.push(createEnemy(ENEMY_TYPES.hangar, hangarPosition));
@@ -5622,14 +6328,28 @@
       if (!target || target.upgradeRound !== upgradeState.round) continue;
       const choice = normalizeUpgradeChoice(target.upgradeChoice);
       if (!choice) continue;
+      if (
+        !isUpgradeAvailableForTank(
+          choice,
+          target.tankId,
+          upgradeState.round
+        )
+      ) continue;
       upgradeState.choices[target.role] = choice;
-      upgradeState.stats[target.role] = createUpgradeLevels({
+      const incomingStats = createUpgradeLevels({
         speed: target.upgradeSpeed,
         armor: target.upgradeArmor,
         range: target.upgradeRange,
         systems: target.upgradeSystems,
-        fireRate: target.upgradeFireRate
+        fireRate: target.upgradeFireRate,
+        twinCannon: target.upgradeTwinCannon,
+        holographicDecoy: target.upgradeHolographicDecoy,
+        spectralAmbush: target.upgradeSpectralAmbush
       });
+      if (target.tankId !== "bastion") incomingStats.twinCannon = 0;
+      if (target.tankId !== "scout") incomingStats.holographicDecoy = 0;
+      if (target.tankId !== "spectre") incomingStats.spectralAmbush = 0;
+      upgradeState.stats[target.role] = incomingStats;
     }
   }
 
@@ -5673,6 +6393,7 @@
       gameOver ||
       !upgradeState.active ||
       localUpgradeChoice ||
+      !isUpgradeAvailableForTank(id, player.tankId, upgradeState.round) ||
       (maxLevel > 0 && getRoleUpgrades(role)[id] >= maxLevel)
     ) return;
 
@@ -5695,6 +6416,8 @@
     remoteWorldShells.length = 0;
     armorPowerups.length = 0;
     supportTurrets.length = 0;
+    holographicDecoys.length = 0;
+    survivalReinforcements.length = 0;
     particles.length = 0;
     tankDebris.length = 0;
     enemySerial = 0;
@@ -5702,6 +6425,7 @@
     mineSerial = 0;
     armorPowerupSerial = 0;
     supportTurretSerial = 0;
+    holographicDecoySerial = 0;
     missionFailureReason = "";
     defeatedPlayerRole = "";
     const initialWavePlan = createWavePlan(0);
@@ -5733,6 +6457,10 @@
       scoutTurboTimer: 0,
       scoutTurboCooldown: 0,
       scoutTurboTrailTimer: 0,
+      holographicDecoyCooldown: 0,
+      phaseCloakTimer: 0,
+      phaseCloakCooldown: 0,
+      spectralAmbushTimer: 0,
       score: 0,
       wave: 0,
       kills: 0,
@@ -5743,6 +6471,7 @@
     alignmentPulse = 0;
     kamikazeWarningTimer = 0;
     mineWarningTimer = 0;
+    lastGeneratorShieldToneAt = 0;
     screenShake = 0;
     flash = 0;
     waveBanner = 0;
@@ -5751,6 +6480,8 @@
     dropElapsed = 0;
     landingPulse = 0;
     localStateSequence = 0;
+    nextPlayerStateBuildAt = 0;
+    nextWorldStateBuildAt = 0;
     // Ces compteurs restent monotones entre deux missions d'un meme salon.
     // Firebase peut livrer l'ancien etat d'un joueur pendant la relance : les
     // remettre a zero ferait alors ignorer ses nouveaux tirs et impulsions.
@@ -5758,6 +6489,8 @@
     appliedWorldSequence = -1;
     sharedPulseSequence = 0;
     appliedPulseSequence = 0;
+    decoyExplosionSequence = 0;
+    appliedDecoyExplosionSequence = 0;
     armorPickupSequence = 0;
     appliedArmorPickupSequence = 0;
     sharedGameOver = false;
@@ -5777,7 +6510,8 @@
       y: 0.86,
       z: initialFormation.z,
       yaw: initialFormation.heading,
-      tankId: selectedTankId
+      tankId: selectedTankId,
+      empowered: false
     };
     lastLocalPulse = { x: initialFormation.x, z: initialFormation.z };
     lastLocalTurretDeploy = {
@@ -5791,7 +6525,13 @@
       z: initialFormation.z,
       yaw: initialFormation.heading
     };
+    lastLocalDecoy = {
+      x: initialFormation.x,
+      z: initialFormation.z,
+      heading: initialFormation.heading
+    };
     latestSharedPulse = null;
+    latestDecoyExplosion = null;
     recentLocalPulseVisual = null;
     latestArmorPickup = null;
     cameraPitch = DROP_SEQUENCE.START_PITCH;
@@ -5989,21 +6729,23 @@
     }
   }
 
-  function createMuzzleSmoke(yaw) {
-    const originX = player.x + Math.sin(yaw) * 2.05;
-    const originZ = player.z + Math.cos(yaw) * 2.05;
+  function createMuzzleSmoke(yaw, cannonOffset = 0) {
+    const originX =
+      player.x + Math.sin(yaw) * 2.05 + Math.cos(yaw) * cannonOffset;
+    const originZ =
+      player.z + Math.cos(yaw) * 2.05 - Math.sin(yaw) * cannonOffset;
 
     for (let i = 0; i < 8; i += 1) {
       const spread = (Math.random() - 0.5) * 0.7;
       const smokeHeading = yaw + spread;
       const speed = 0.45 + Math.random() * 1.1;
       const life = 0.48 + Math.random() * 0.42;
-      const lateralOffset = (Math.random() - 0.5) * 0.28;
+      const smokeOffset = (Math.random() - 0.5) * 0.28;
       particles.push({
         kind: "smoke",
-        x: originX + Math.cos(yaw) * lateralOffset,
+        x: originX + Math.cos(yaw) * smokeOffset,
         y: player.altitude + 0.82 + Math.random() * 0.16,
-        z: originZ - Math.sin(yaw) * lateralOffset,
+        z: originZ - Math.sin(yaw) * smokeOffset,
         vx: Math.sin(smokeHeading) * speed,
         vy: 0.18 + Math.random() * 0.5,
         vz: Math.cos(smokeHeading) * speed,
@@ -6076,29 +6818,57 @@
       isUpgradeActive() ||
       player.reload > 0
     ) return;
+    cancelPhaseCloak();
     const tank = getPlayerTank();
     const yaw = player.heading + player.turretOffset;
-    shells.push({
-      id: ++shellSerial,
-      kind: "direct",
-      x: player.x + Math.sin(yaw) * 1.8,
-      y: player.altitude + 0.86,
-      z: player.z + Math.cos(yaw) * 1.8,
-      vx: Math.sin(yaw) * tank.shellSpeed,
-      vz: Math.cos(yaw) * tank.shellSpeed,
-      life: tank.shellLifetime,
-      owner: "player",
-      ownerRole: isCoopGame() ? getLocalRole() : "player"
-    });
+    const role = getLocalRole();
+    const spectralAmbush =
+      player.tankId === "spectre" &&
+      getRoleUpgrades(role).spectralAmbush > 0 &&
+      player.spectralAmbushTimer > 0;
+    if (spectralAmbush) player.spectralAmbushTimer = 0;
+    const cannonOffsets = getPlayerCannonOffsets(
+      player.tankId,
+      getRoleUpgrades(role)
+    );
+    for (const cannonOffset of cannonOffsets) {
+      shells.push({
+        id: ++shellSerial,
+        kind: "direct",
+        x:
+          player.x +
+          Math.sin(yaw) * 1.8 +
+          Math.cos(yaw) * cannonOffset,
+        y: player.altitude + 0.86,
+        z:
+          player.z +
+          Math.cos(yaw) * 1.8 -
+          Math.sin(yaw) * cannonOffset,
+        vx: Math.sin(yaw) * tank.shellSpeed,
+        vz: Math.cos(yaw) * tank.shellSpeed,
+        life: tank.shellLifetime,
+        owner: "player",
+        ownerRole: isCoopGame() ? role : "player",
+        damage: spectralAmbush ? PHASE_CLOAK.AMBUSH_DAMAGE : 1,
+        pierceRemaining: spectralAmbush ? PHASE_CLOAK.AMBUSH_PIERCE : 0,
+        spectralAmbush,
+        hitEnemyIds: []
+      });
+      createMuzzleSmoke(yaw, cannonOffset);
+    }
     localShotSequence += 1;
     lastLocalShot = {
       x: player.x,
       y: player.altitude + 0.86,
       z: player.z,
       yaw,
-      tankId: player.tankId
+      tankId: player.tankId,
+      empowered: spectralAmbush
     };
-    createMuzzleSmoke(yaw);
+    if (spectralAmbush) {
+      burst(player.x + Math.sin(yaw) * 2, player.z + Math.cos(yaw) * 2, COLORS.violet, 14);
+      tone(620, 0.12, "sawtooth", 0.04, -210);
+    }
     playCannonFireSound();
     player.reload = tank.reloadTime;
     screenShake = 5;
@@ -6151,7 +6921,11 @@
     }
 
     for (const enemy of [...enemies]) {
-      if (Math.hypot(enemy.x - x, enemy.z - z) > SHOCK_PULSE.RADIUS) continue;
+      if (
+        Math.hypot(enemy.x - x, enemy.z - z, enemy.elevation ?? 0) >
+        SHOCK_PULSE.RADIUS
+      ) continue;
+      if (absorbPowerGeneratorShield(enemy, x, z)) continue;
       if (absorbEnemyShield(enemy, x, z)) continue;
       enemy.health -= SHOCK_PULSE.DAMAGE;
       enemy.hitFlash = 0.2;
@@ -6175,6 +6949,7 @@
     ) return;
 
     initAudio();
+    cancelPhaseCloak();
     player.pulseCooldown = SHOCK_PULSE.RELOAD_TIME;
     localPulseSequence += 1;
     lastLocalPulse = { x: player.x, z: player.z };
@@ -6194,22 +6969,43 @@
 
   function spawnRemotePlayerShot(shot) {
     if (!running || missionPhase !== MISSION_PHASE.COMBAT) return;
+    const upgrades = getRoleUpgrades(shot.role);
     const tank = getTankStats(
       shot.shotTankId,
-      getRoleUpgrades(shot.role)
+      upgrades
     );
-    shells.push({
-      id: ++shellSerial,
-      kind: "direct",
-      x: shot.shotX + Math.sin(shot.shotYaw) * 1.8,
-      y: Number(shot.shotY) || 0.86,
-      z: shot.shotZ + Math.cos(shot.shotYaw) * 1.8,
-      vx: Math.sin(shot.shotYaw) * tank.shellSpeed,
-      vz: Math.cos(shot.shotYaw) * tank.shellSpeed,
-      life: tank.shellLifetime,
-      owner: "ally",
-      ownerRole: shot.role
-    });
+    const spectralAmbush =
+      shot.shotTankId === "spectre" &&
+      Boolean(shot.shotEmpowered) &&
+      upgrades.spectralAmbush > 0;
+    const cannonOffsets = getPlayerCannonOffsets(shot.shotTankId, upgrades);
+    for (const cannonOffset of cannonOffsets) {
+      shells.push({
+        id: ++shellSerial,
+        kind: "direct",
+        x:
+          shot.shotX +
+          Math.sin(shot.shotYaw) * 1.8 +
+          Math.cos(shot.shotYaw) * cannonOffset,
+        y: Number(shot.shotY) || 0.86,
+        z:
+          shot.shotZ +
+          Math.cos(shot.shotYaw) * 1.8 -
+          Math.sin(shot.shotYaw) * cannonOffset,
+        vx: Math.sin(shot.shotYaw) * tank.shellSpeed,
+        vz: Math.cos(shot.shotYaw) * tank.shellSpeed,
+        life: tank.shellLifetime,
+        owner: "ally",
+        ownerRole: shot.role,
+        damage: spectralAmbush ? PHASE_CLOAK.AMBUSH_DAMAGE : 1,
+        pierceRemaining: spectralAmbush ? PHASE_CLOAK.AMBUSH_PIERCE : 0,
+        spectralAmbush,
+        hitEnemyIds: []
+      });
+    }
+    if (spectralAmbush) {
+      burst(shot.shotX, shot.shotZ, COLORS.violet, 10);
+    }
     tone(92, 0.08, "square", 0.012, -30);
   }
 
@@ -6234,7 +7030,16 @@
       const clearOfTurrets = supportTurrets.every(
         (turret) => Math.hypot(position.x - turret.x, position.z - turret.z) > 2.1
       );
-      if (insideWorld && clearOfRocks && clearOfEnemies && clearOfTurrets) {
+      const clearOfDecoys = holographicDecoys.every(
+        (decoy) => Math.hypot(position.x - decoy.x, position.z - decoy.z) > 2.2
+      );
+      if (
+        insideWorld &&
+        clearOfRocks &&
+        clearOfEnemies &&
+        clearOfTurrets &&
+        clearOfDecoys
+      ) {
         return { x: position.x, z: position.z };
       }
     }
@@ -6367,6 +7172,136 @@
     }
   }
 
+  function createHolographicDecoyExplosionEffects(x, z) {
+    burst(x, z, COLORS.cyan, 38, 0.55);
+    burst(x, z, COLORS.white, 18, 0.72);
+    createBlastSmoke(x, z);
+    particles.push({
+      kind: "shockwave",
+      source: "holographic-decoy",
+      x,
+      y: 0.05,
+      z,
+      vx: 0,
+      vy: 0,
+      vz: 0,
+      gravity: 0,
+      drag: 0,
+      growth: 0,
+      size: 0,
+      color: COLORS.cyan,
+      maxRadius: HOLOGRAPHIC_DECOY.EXPLOSION_RADIUS,
+      life: 0.62,
+      maxLife: 0.62
+    });
+    const localDistance = Math.hypot(x - player.x, z - player.z);
+    screenShake = Math.max(screenShake, Math.max(1, 11 - localDistance * 0.55));
+    playTankExplosionSound(x, z, 0.72);
+    tone(170, 0.28, "sawtooth", 0.055, 260);
+    tone(620, 0.12, "square", 0.025, -180);
+  }
+
+  function explodeHolographicDecoy(decoy) {
+    if (!isWorldAuthority()) return false;
+    const index = holographicDecoys.indexOf(decoy);
+    if (index === -1) return false;
+    holographicDecoys.splice(index, 1);
+    createHolographicDecoyExplosionEffects(decoy.x, decoy.z);
+    if (isCoopGame()) {
+      latestDecoyExplosion = {
+        sequence: ++decoyExplosionSequence,
+        x: Number(decoy.x.toFixed(3)),
+        z: Number(decoy.z.toFixed(3))
+      };
+    }
+
+    for (const enemy of [...enemies]) {
+      const blastDistance = Math.hypot(
+        decoy.x - enemy.x,
+        decoy.z - enemy.z,
+        enemy.elevation ?? 0
+      );
+      if (blastDistance > HOLOGRAPHIC_DECOY.EXPLOSION_RADIUS) continue;
+      if (absorbPowerGeneratorShield(enemy, decoy.x, decoy.z)) continue;
+      if (absorbEnemyShield(enemy, decoy.x, decoy.z)) continue;
+      const falloff = 1 - blastDistance / HOLOGRAPHIC_DECOY.EXPLOSION_RADIUS;
+      const damage = Math.max(
+        1,
+        Math.ceil(HOLOGRAPHIC_DECOY.EXPLOSION_DAMAGE * falloff)
+      );
+      enemy.health -= damage;
+      enemy.hitFlash = 0.22;
+      if (enemy.health <= 0) {
+        destroyEnemy(enemy, decoy.ownerRole);
+      } else {
+        player.score += 20 * damage;
+        burst(enemy.x, enemy.z, COLORS.cyan, 10, 0.5 + (enemy.elevation ?? 0));
+      }
+    }
+    return true;
+  }
+
+  function spawnHolographicDecoy(x, z, heading, ownerRole = getLocalRole()) {
+    if (!isWorldAuthority() || missionPhase !== MISSION_PHASE.COMBAT) return null;
+    const activeDecoy = holographicDecoys.find(
+      (decoy) => decoy.ownerRole === ownerRole && decoy.health > 0 && decoy.life > 0
+    );
+    if (activeDecoy) return activeDecoy;
+    const decoy = {
+      id: ++holographicDecoySerial,
+      kind: "holographicDecoy",
+      ownerRole,
+      x: Math.max(-WORLD_LIMIT + 2, Math.min(WORLD_LIMIT - 2, Number(x) || 0)),
+      z: Math.max(-WORLD_LIMIT + 2, Math.min(WORLD_LIMIT - 2, Number(z) || 0)),
+      heading: normalizeAngle(Number(heading) || 0),
+      health: HOLOGRAPHIC_DECOY.HEALTH,
+      maxHealth: HOLOGRAPHIC_DECOY.HEALTH,
+      life: HOLOGRAPHIC_DECOY.LIFETIME,
+      maxLife: HOLOGRAPHIC_DECOY.LIFETIME,
+      hitFlash: 0
+    };
+    holographicDecoys.push(decoy);
+    for (const enemy of enemies) enemy.targetLockTimer = 0;
+    burst(decoy.x, decoy.z, COLORS.cyan, 24, 0.48);
+    tone(510, 0.13, "square", 0.03, 210);
+    return decoy;
+  }
+
+  function deployHolographicDecoy() {
+    const role = getLocalRole();
+    if (
+      !running ||
+      paused ||
+      gameOver ||
+      missionPhase !== MISSION_PHASE.COMBAT ||
+      isUpgradeActive() ||
+      player.tankId !== "scout" ||
+      getRoleUpgrades(role).holographicDecoy <= 0 ||
+      player.holographicDecoyCooldown > 0 ||
+      holographicDecoys.some(
+        (decoy) => decoy.ownerRole === role && decoy.health > 0 && decoy.life > 0
+      )
+    ) return;
+    initAudio();
+    const position = findSupportPlacement(player.x, player.z, player.heading, 3.2);
+    lastLocalDecoy = {
+      x: position.x,
+      z: position.z,
+      heading: player.heading
+    };
+    localDecoyDeploySequence += 1;
+    player.holographicDecoyCooldown = getAbilityCooldown(
+      HOLOGRAPHIC_DECOY.COOLDOWN
+    );
+    if (isWorldAuthority()) {
+      spawnHolographicDecoy(position.x, position.z, player.heading, role);
+    } else {
+      burst(position.x, position.z, COLORS.cyan, 18, 0.42);
+      tone(510, 0.13, "square", 0.025, 210);
+    }
+    publishLocalPlayerState();
+  }
+
   function activateOrbitalBarrage(x, z, yaw, ownerRole = getLocalRole()) {
     if (!isWorldAuthority() || missionPhase !== MISSION_PHASE.COMBAT) return;
     const originX = Math.max(-WORLD_LIMIT + 2, Math.min(WORLD_LIMIT - 2, Number(x) || 0));
@@ -6476,6 +7411,46 @@
     player.scoutTurboTrailTimer = 0;
     burst(player.x, player.z, COLORS.cyan, 18, 0.42);
     playVectorTurboSound();
+  }
+
+  function armSpectralAmbush() {
+    if (
+      player.tankId !== "spectre" ||
+      getRoleUpgrades(getLocalRole()).spectralAmbush <= 0
+    ) return false;
+    player.spectralAmbushTimer = PHASE_CLOAK.AMBUSH_DURATION;
+    burst(player.x, player.z, COLORS.violet, 12, 0.42);
+    tone(540, 0.11, "sine", 0.03, 180);
+    return true;
+  }
+
+  function cancelPhaseCloak() {
+    if (player.tankId !== "spectre" || player.phaseCloakTimer <= 0) return false;
+    player.phaseCloakTimer = 0;
+    armSpectralAmbush();
+    burst(player.x, player.z, COLORS.cyan, 8, 0.38);
+    tone(410, 0.08, "square", 0.018, -140);
+    return true;
+  }
+
+  function activatePhaseCloak() {
+    if (
+      !running ||
+      paused ||
+      gameOver ||
+      missionPhase !== MISSION_PHASE.COMBAT ||
+      isUpgradeActive() ||
+      player.tankId !== "spectre" ||
+      player.phaseCloakTimer > 0 ||
+      player.phaseCloakCooldown > 0
+    ) return;
+    initAudio();
+    player.spectralAmbushTimer = 0;
+    player.phaseCloakTimer = PHASE_CLOAK.DURATION;
+    player.phaseCloakCooldown = getAbilityCooldown(PHASE_CLOAK.COOLDOWN);
+    burst(player.x, player.z, COLORS.cyan, 20, 0.46);
+    tone(260, 0.18, "sine", 0.045, 520);
+    tone(780, 0.12, "square", 0.018, -260);
   }
 
   function createGhostMuzzleSmoke(enemy, shotYaw) {
@@ -6648,6 +7623,7 @@
       if (role === "objective" || role.startsWith("turret:")) return false;
       const range = distance(enemy, target);
       return (
+        isCombatTargetDetectable(enemy, target, range) &&
         range >= BEHEMOTH_MORTAR.MIN_RANGE &&
         range <= BEHEMOTH_MORTAR.MAX_RANGE
       );
@@ -7059,6 +8035,17 @@
     player.orbitalCooldown = Math.max(0, player.orbitalCooldown - dt);
     player.scoutTurboTimer = Math.max(0, player.scoutTurboTimer - dt);
     player.scoutTurboCooldown = Math.max(0, player.scoutTurboCooldown - dt);
+    player.holographicDecoyCooldown = Math.max(
+      0,
+      player.holographicDecoyCooldown - dt
+    );
+    const phaseCloakWasActive = player.phaseCloakTimer > 0;
+    player.phaseCloakTimer = Math.max(0, player.phaseCloakTimer - dt);
+    if (phaseCloakWasActive && player.phaseCloakTimer <= 0) {
+      armSpectralAmbush();
+    }
+    player.phaseCloakCooldown = Math.max(0, player.phaseCloakCooldown - dt);
+    player.spectralAmbushTimer = Math.max(0, player.spectralAmbushTimer - dt);
     player.invulnerable = Math.max(0, player.invulnerable - dt);
     alignmentPulse = Math.max(0, alignmentPulse - dt);
   }
@@ -7647,7 +8634,9 @@
       heading: player.heading,
       speed: player.speed,
       altitude: player.altitude,
-      health: player.health
+      health: player.health,
+      tankId: player.tankId,
+      cloaked: player.tankId === "spectre" && player.phaseCloakTimer > 0
     }];
     if (isCoopGame() && networkSnapshot.role === "host") {
       for (const remote of remotePlayers.values()) {
@@ -7663,7 +8652,9 @@
           heading: remote.heading,
           speed: 0,
           altitude: remote.altitude,
-          health: remoteHealth
+          health: remoteHealth,
+          tankId: remote.tankId,
+          cloaked: remote.tankId === "spectre" && remote.phaseCloakTimer > 0
         });
       }
     }
@@ -7677,6 +8668,19 @@
         speed: 0,
         altitude: 0,
         health: turret.health
+      });
+    }
+    for (const decoy of holographicDecoys) {
+      if (decoy.health <= 0 || decoy.life <= 0) continue;
+      targets.push({
+        role: `decoy:${decoy.id}`,
+        x: decoy.x,
+        z: decoy.z,
+        heading: decoy.heading,
+        speed: 0,
+        altitude: 0,
+        health: decoy.health,
+        hologram: true
       });
     }
     if (
@@ -7695,6 +8699,13 @@
       });
     }
     return targets.filter((target) => target.health > 0);
+  }
+
+  function isCombatTargetDetectable(source, target, knownRange = null) {
+    const range = knownRange ?? distance(source, target);
+    if (target.hologram) return range <= HOLOGRAPHIC_DECOY.ATTRACTION_RADIUS;
+    if (!target.cloaked) return true;
+    return range <= PHASE_CLOAK.DETECTION_RADIUS;
   }
 
   function getTargetByRole(role) {
@@ -7816,7 +8827,11 @@
       let targetRange = SUPPORT_SYSTEM.TURRET_RANGE;
       for (const enemy of enemies) {
         const type = getEnemyType(enemy);
-        if (enemy.health <= 0 || (type.id === "ghost" && (enemy.revealTimer ?? 0) <= 0)) {
+        if (
+          enemy.health <= 0 ||
+          isEnemyProtectedByPowerGenerators(enemy) ||
+          (type.id === "ghost" && (enemy.revealTimer ?? 0) <= 0)
+        ) {
           continue;
         }
         const range = distance(turret, enemy);
@@ -7857,6 +8872,17 @@
     }
   }
 
+  function updateHolographicDecoys(dt) {
+    if (!isWorldAuthority()) return;
+    for (const decoy of [...holographicDecoys]) {
+      decoy.life = Math.max(0, decoy.life - dt);
+      decoy.hitFlash = Math.max(0, (decoy.hitFlash ?? 0) - dt);
+      if (decoy.health <= 0 || decoy.life <= 0) {
+        explodeHolographicDecoy(decoy);
+      }
+    }
+  }
+
   function chooseEnemyTarget(enemy, combatTargets, targetLoads, dt) {
     enemy.targetLockTimer = Math.max(0, (enemy.targetLockTimer ?? 0) - dt);
     const type = getEnemyType(enemy);
@@ -7865,7 +8891,8 @@
     const lockedTarget = combatTargets.find(
       (target) =>
         target.role === enemy.targetRole &&
-        !(type.id === "artillery" && target.role === "objective")
+        !(type.id === "artillery" && target.role === "objective") &&
+        isCombatTargetDetectable(enemy, target)
     );
     if (lockedTarget && enemy.targetLockTimer > 0) {
       if (countsTowardLoad) {
@@ -7883,12 +8910,14 @@
     for (const target of combatTargets) {
       if (type.id === "artillery" && target.role === "objective") continue;
       const range = distance(enemy, target);
+      if (!isCombatTargetDetectable(enemy, target, range)) continue;
       const assignedEnemies = targetLoads.get(target.role) ?? 0;
       let score = range + assignedEnemies * (countsTowardLoad ? 8 : 0);
       if (target.role === "objective") {
         score += SCRIPTED_MISSION.DEFENSE_TARGET_PRIORITY;
       }
       if (String(target.role).startsWith("turret:")) score += 4;
+      if (target.hologram) score -= HOLOGRAPHIC_DECOY.TARGET_PRIORITY;
       if (type.kamikaze) score += target.health * 0.075;
       if (target.role === enemy.targetRole) score -= 2.5;
       if (score < chosenScore) {
@@ -7973,7 +9002,9 @@
 
   function updateEnemyShields(dt) {
     const guardians = enemies.filter(
-      (enemy) => getEnemyType(enemy).id === "guardian"
+      (enemy) =>
+        getEnemyType(enemy).id === "guardian" &&
+        !enemy.reinforcementDrop
     );
 
     for (const enemy of enemies) {
@@ -7986,7 +9017,11 @@
       if (enemyType.id !== "guardian") {
         enemy.shieldSourceId = 0;
       }
-      if (enemyType.id === "guardian" || enemyType.id === "ghost") {
+      if (
+        enemyType.id === "guardian" ||
+        enemyType.id === "ghost" ||
+        enemyType.powerGenerator
+      ) {
         enemy.shieldCharge = 0;
         enemy.shieldCooldown = 0;
       }
@@ -7999,7 +9034,16 @@
 
     for (const target of enemies) {
       const targetType = getEnemyType(target);
-      if (targetType.id === "guardian" || targetType.id === "ghost") {
+      if (target.reinforcementDrop) {
+        target.shieldSourceId = 0;
+        target.shieldCharge = 0;
+        continue;
+      }
+      if (
+        targetType.id === "guardian" ||
+        targetType.id === "ghost" ||
+        targetType.powerGenerator
+      ) {
         continue;
       }
       if (targetType.airborne) {
@@ -8289,6 +9333,7 @@
     let chosenScore = Infinity;
     for (const target of combatTargets) {
       const range = distance(mount, target);
+      if (!isCombatTargetDetectable(mount, target, range)) continue;
       if (range > TRAIN_MISSION.FIRE_RANGE) continue;
       const score = range + (target.role === avoidedRole ? 10 : 0);
       if (score >= chosenScore) continue;
@@ -8396,6 +9441,52 @@
     );
   }
 
+  function createSurvivalReinforcementLandingEffects(enemy) {
+    burst(enemy.x, enemy.z, COLORS.amber, 22, 0.28);
+    particles.push({
+      kind: "shockwave",
+      x: enemy.x,
+      y: 0.05,
+      z: enemy.z,
+      vx: 0,
+      vy: 0,
+      vz: 0,
+      gravity: 0,
+      drag: 0,
+      growth: 0,
+      size: 0,
+      color: COLORS.amber,
+      maxRadius: 5,
+      life: 0.48,
+      maxLife: 0.48
+    });
+    const localDistance = Math.hypot(enemy.x - player.x, enemy.z - player.z);
+    screenShake = Math.max(screenShake, Math.max(0, 10 - localDistance * 0.3));
+    tone(62, 0.24, "sawtooth", 0.052, -18);
+    tone(230, 0.08, "square", 0.022, -80);
+  }
+
+  function updateEnemyReinforcementDrop(enemy, type, dt) {
+    if (!enemy.reinforcementDrop) return false;
+    const targetElevation = Math.max(
+      0,
+      Number(enemy.dropTargetElevation) || (type.airborne ? DRONE_CRUISE_ALTITUDE : 0)
+    );
+    enemy.elevation = Math.max(
+      targetElevation,
+      (Number(enemy.elevation) || 0) - SCRIPTED_MISSION.SURVIVAL_DROP_SPEED * dt
+    );
+    enemy.turretHeading = enemy.heading;
+    enemy.reload = Math.max(enemy.reload, 0.9);
+    if (enemy.elevation > targetElevation + 0.01) return true;
+    enemy.elevation = targetElevation;
+    enemy.reinforcementDrop = false;
+    enemy.state = type.static ? ENEMY_STATE.ENGAGE : ENEMY_STATE.APPROACH;
+    enemy.stateTimer = 0.25;
+    createSurvivalReinforcementLandingEffects(enemy);
+    return false;
+  }
+
   function updateEnemies(dt) {
     const pendingDetonations = [];
     const combatTargets = getCombatTargets();
@@ -8412,6 +9503,7 @@
         0,
         (enemy.fireRecoveryTimer ?? 0) - dt
       );
+      if (updateEnemyReinforcementDrop(enemy, type, dt)) continue;
       if (type.train) {
         updateArmoredTrain(enemy, combatTargets, dt);
         continue;
@@ -8513,6 +9605,7 @@
     let nearestDistance = 28;
     for (const enemy of enemies) {
       if (!getEnemyType(enemy).kamikaze) continue;
+      if (enemy.reinforcementDrop) continue;
       const range = Math.hypot(enemy.x - player.x, enemy.z - player.z);
       if (range >= nearestDistance) continue;
       nearest = enemy;
@@ -8579,16 +9672,120 @@
     missionFailureReason = reason;
     defeatedPlayerRole = "";
     sharedGameOver = true;
-    publishSharedWorld();
+    publishSharedWorld(true);
     endGame();
+  }
+
+  function updateSurvivalReinforcementStatus() {
+    missionState.reinforcementsPending = survivalReinforcements.length;
+    missionState.nextReinforcementTimer = survivalReinforcements.length > 0
+      ? Math.min(...survivalReinforcements.map((entry) => entry.timer))
+      : 0;
+  }
+
+  function scheduleSurvivalReinforcement(enemy) {
+    if (
+      missionState.type !== SCRIPTED_MISSION.SURVIVAL ||
+      !missionState.active ||
+      missionState.completed ||
+      missionState.timer <= 0
+    ) return false;
+    const type = getEnemyType(enemy);
+    if (type.train || type.hangar || type.objectiveBuilding) return false;
+    survivalReinforcements.push({
+      typeId: type.id,
+      x: Number(enemy.x) || 0,
+      z: Number(enemy.z) || 0,
+      heading: Number(enemy.heading) || 0,
+      timer: SCRIPTED_MISSION.SURVIVAL_REINFORCEMENT_DELAY
+    });
+    updateSurvivalReinforcementStatus();
+    return true;
+  }
+
+  function spawnSurvivalReinforcement(entry, index) {
+    const type = ENEMY_TYPES[entry.typeId] ?? ENEMY_TYPES.assault;
+    let position = {
+      x: Math.max(-WORLD_LIMIT + 4, Math.min(WORLD_LIMIT - 4, Number(entry.x) || 0)),
+      z: Math.max(-WORLD_LIMIT + 4, Math.min(WORLD_LIMIT - 4, Number(entry.z) || 0))
+    };
+    if (
+      circleCollision(position.x, position.z, 1.25 * type.scale) ||
+      !isEnemySpawnClear(position, type)
+    ) {
+      position = findEnemySpawn(type, enemySerial + index + 1);
+    }
+    const reinforcement = createEnemy(type, position, {
+      heading: entry.heading,
+      reinforcementDrop: true
+    });
+    reinforcement.reload = Math.max(reinforcement.reload, 1.35);
+    enemies.push(reinforcement);
+    burst(position.x, position.z, COLORS.amber, 10, 0.12);
+    tone(690, 0.08, "square", 0.018, -180);
+  }
+
+  function updateSurvivalReinforcements(dt) {
+    for (let index = survivalReinforcements.length - 1; index >= 0; index -= 1) {
+      const entry = survivalReinforcements[index];
+      entry.timer = Math.max(0, entry.timer - dt);
+      if (entry.timer > 0) continue;
+      spawnSurvivalReinforcement(entry, index);
+      survivalReinforcements.splice(index, 1);
+    }
+    updateSurvivalReinforcementStatus();
+  }
+
+  function completeSurvivalMission() {
+    if (missionState.completed) return;
+    missionState.completed = true;
+    missionState.timer = 0;
+    survivalReinforcements.length = 0;
+    updateSurvivalReinforcementStatus();
+    for (const enemy of enemies) {
+      const type = getEnemyType(enemy);
+      if (!type.train && !type.hangar && !type.objectiveBuilding) {
+        createTankDebris(enemy);
+      }
+      burst(enemy.x, enemy.z, COLORS.cyan, 14, 0.4 + (enemy.elevation ?? 0));
+    }
+    enemies.length = 0;
+    for (let index = shells.length - 1; index >= 0; index -= 1) {
+      if (shells[index].owner === "enemy") shells.splice(index, 1);
+    }
+    mines.length = 0;
+    waveText = `V${String(player.wave).padStart(2, "0")} // SURVIE RÉUSSIE`;
+    waveBanner = 2.8;
+    tone(520, 0.14, "square", 0.042, 170);
+    setTimeout(() => tone(820, 0.2, "square", 0.035, 110), 110);
   }
 
   function updateScriptedMission(dt) {
     if (!isWorldAuthority() || !missionState.active || gameOver) return;
+    if (missionState.type === SCRIPTED_MISSION.SURVIVAL) {
+      if (missionState.completed) return;
+      missionState.timer = Math.max(0, missionState.timer - dt);
+      if (missionState.timer <= 0) {
+        completeSurvivalMission();
+        return;
+      }
+      updateSurvivalReinforcements(dt);
+      return;
+    }
     if (missionState.type === SCRIPTED_MISSION.DEFEND) {
       missionState.shieldTimer = Math.max(0, missionState.shieldTimer - dt);
       if (missionState.health <= 0) {
         failScriptedMission("LE RELAIS A ÉTÉ DÉTRUIT");
+      }
+      return;
+    }
+    if (missionState.type === SCRIPTED_MISSION.GENERATORS) {
+      if (!missionState.completed && getActivePowerGenerators().length === 0) {
+        missionState.completed = true;
+        waveText = "BOUCLIER NEUTRALISÉ // CIBLES VULNÉRABLES";
+        waveBanner = 2.4;
+        tone(480, 0.13, "square", 0.04, 180);
+        setTimeout(() => tone(820, 0.18, "square", 0.035, 120), 105);
       }
       return;
     }
@@ -8664,13 +9861,28 @@
       defeatedPlayerRole = isCoopGame() ? getLocalRole() : "";
       if (isCoopGame() && networkSnapshot.role === "host") {
         sharedGameOver = true;
-        publishSharedWorld();
+        publishSharedWorld(true);
       }
       endGame();
     }
   }
 
   function damageCombatTarget(role, amount, impactX, impactZ, shake = 12) {
+    if (String(role).startsWith("decoy:")) {
+      if (!isWorldAuthority()) return;
+      const decoyId = Number(String(role).slice(6));
+      const decoy = holographicDecoys.find(
+        (candidate) => Number(candidate.id) === decoyId
+      );
+      if (!decoy || decoy.health <= 0) return;
+      const decoyDamage = Math.max(1, Math.round((Number(amount) || 1) / 18));
+      decoy.health = Math.max(0, decoy.health - decoyDamage);
+      decoy.hitFlash = 0.22;
+      burst(impactX, impactZ, COLORS.cyan, 14, 0.58);
+      tone(460, 0.06, "square", 0.02, -110);
+      if (decoy.health <= 0) explodeHolographicDecoy(decoy);
+      return;
+    }
     if (String(role).startsWith("turret:")) {
       if (!isWorldAuthority()) return;
       const turretId = Number(String(role).slice(7));
@@ -8736,7 +9948,7 @@
     if (coopHealth[role] <= 0) {
       defeatedPlayerRole = role;
       sharedGameOver = true;
-      publishSharedWorld();
+      publishSharedWorld(true);
       endGame();
     }
   }
@@ -8799,6 +10011,7 @@
     if (type.kamikaze) return detonateKamikaze(enemy, creditedRole);
 
     enemies.splice(enemyIndex, 1);
+    scheduleSurvivalReinforcement(enemy);
     if (creditedRole) awardEnemyDestruction(enemy, creditedRole);
     if (type.id === "guardian") clearGuardianShields(enemy.id);
     if (type.train) {
@@ -8809,12 +10022,23 @@
     burst(
       enemy.x,
       enemy.z,
-      type.priority ? COLORS.amber : COLORS.red,
-      32,
+      type.powerGenerator
+        ? COLORS.cyan
+        : type.priority
+          ? COLORS.amber
+          : COLORS.red,
+      type.powerGenerator ? 48 : 32,
       0.4 + (enemy.elevation ?? 0)
     );
+    if (type.powerGenerator) {
+      burst(enemy.x, enemy.z, COLORS.amber, 24, 0.68);
+      tone(310, 0.16, "square", 0.04, -140);
+    }
     if (!type.train) playTankExplosionSound(enemy.x, enemy.z);
-    screenShake = Math.max(screenShake, type.train ? 19 : 9);
+    screenShake = Math.max(
+      screenShake,
+      type.train ? 19 : type.powerGenerator ? 14 : 9
+    );
     if (!type.train) tone(58, 0.34, "sawtooth", 0.08, -20);
     return true;
   }
@@ -8824,6 +10048,7 @@
     if (enemyIndex === -1) return false;
 
     enemies.splice(enemyIndex, 1);
+    scheduleSurvivalReinforcement(enemy);
     if (creditedRole) awardEnemyDestruction(enemy, creditedRole);
     createKamikazeExplosionEffects(enemy);
 
@@ -8853,6 +10078,7 @@
         nearbyEnemy.elevation ?? 0
       );
       if (blastDistance > KAMIKAZE_BLAST_RADIUS) continue;
+      if (absorbPowerGeneratorShield(nearbyEnemy, enemy.x, enemy.z)) continue;
       if (absorbEnemyShield(nearbyEnemy, enemy.x, enemy.z)) continue;
 
       const falloff = 1 - blastDistance / KAMIKAZE_BLAST_RADIUS;
@@ -8897,10 +10123,12 @@
       for (const enemy of [...enemies]) {
         const blastDistance = Math.hypot(
           shell.targetX - enemy.x,
-          shell.targetZ - enemy.z
+          shell.targetZ - enemy.z,
+          enemy.elevation ?? 0
         );
         if (blastDistance > shell.blastRadius) continue;
         if (getEnemyType(enemy).id === "ghost") revealGhost(enemy, 3, 0.18);
+        if (absorbPowerGeneratorShield(enemy, shell.targetX, shell.targetZ)) continue;
         if (absorbEnemyShield(enemy, shell.targetX, shell.targetZ)) continue;
         const falloff = 1 - blastDistance / shell.blastRadius * 0.45;
         const damage = Math.max(1, Math.round(shell.blastDamage * falloff));
@@ -9000,7 +10228,7 @@
     if (Math.hypot(shell.x - enemy.x, shell.z - enemy.z) >= hitRadius) {
       return false;
     }
-    if (!type.airborne) return true;
+    if (!type.airborne && (enemy.elevation ?? 0) <= 0.45) return true;
     const centerY = (enemy.elevation ?? 0) + 0.48 * type.scale;
     const verticalRadius = 0.76 * type.scale;
     return Math.abs((shell.y ?? 0.86) - centerY) < verticalRadius;
@@ -9055,38 +10283,85 @@
           continue;
         }
 
-        const enemyIndex = enemies.findIndex((enemy) =>
-          shellHitsEnemy(shell, enemy)
+        const hitEnemyIds = Array.isArray(shell.hitEnemyIds)
+          ? shell.hitEnemyIds
+          : (shell.hitEnemyIds = []);
+        const enemyIndex = enemies.findIndex(
+          (enemy) =>
+            !hitEnemyIds.includes(Number(enemy.id)) &&
+            shellHitsEnemy(shell, enemy)
         );
         if (enemyIndex !== -1) {
           const enemy = enemies[enemyIndex];
           const type = getEnemyType(enemy);
-          if (!isWorldAuthority()) {
+          const spectralAmbush = Boolean(shell.spectralAmbush);
+          const canPierceTank =
+            spectralAmbush &&
+            !type.train &&
+            !type.hangar &&
+            !type.objectiveBuilding;
+          const keepsFlying =
+            canPierceTank &&
+            Math.max(0, Number(shell.pierceRemaining) || 0) > 0;
+          if (type.id === "ghost") revealGhost(enemy, 3, 0.16);
+          if (absorbPowerGeneratorShield(enemy, shell.x, shell.z)) {
             shells.splice(i, 1);
-            if (type.id === "ghost") revealGhost(enemy, 3, 0.16);
+            continue;
+          }
+          if (!isWorldAuthority()) {
             const shielded = (enemy.shieldCharge ?? 0) > 0;
             if (shielded) {
               enemy.shieldCharge = 0;
               enemy.shieldFlash = 0.28;
             }
+            if (shielded && !spectralAmbush) {
+              shells.splice(i, 1);
+              burst(shell.x, shell.z, COLORS.cyan, 14);
+              continue;
+            }
+            if (keepsFlying) {
+              shell.pierceRemaining -= 1;
+              hitEnemyIds.push(Number(enemy.id));
+            } else {
+              shells.splice(i, 1);
+            }
             burst(
               shell.x,
               shell.z,
-              shielded ? COLORS.cyan : COLORS.amber,
-              shielded ? 14 : 7
+              spectralAmbush ? COLORS.violet : shielded ? COLORS.cyan : COLORS.amber,
+              spectralAmbush ? 16 : shielded ? 14 : 7
             );
             continue;
           }
-          shells.splice(i, 1);
-          if (type.id === "ghost") revealGhost(enemy, 3, 0.16);
-          if (absorbEnemyShield(enemy, shell.x, shell.z)) {
+          const shielded = absorbEnemyShield(enemy, shell.x, shell.z);
+          if (shielded) {
             player.score += 10;
-            continue;
+            if (!spectralAmbush) {
+              shells.splice(i, 1);
+              continue;
+            }
           }
-          enemy.health -= 1;
+          if (keepsFlying) {
+            shell.pierceRemaining -= 1;
+            hitEnemyIds.push(Number(enemy.id));
+          } else {
+            shells.splice(i, 1);
+          }
+          enemy.health -= Math.max(1, Math.floor(Number(shell.damage) || 1));
           enemy.hitFlash = 0.14;
-          burst(shell.x, shell.z, COLORS.amber, 10);
-          tone(260, 0.07, "square", 0.035, -120);
+          burst(
+            shell.x,
+            shell.z,
+            spectralAmbush ? COLORS.violet : COLORS.amber,
+            spectralAmbush ? 18 : 10
+          );
+          tone(
+            spectralAmbush ? 390 : 260,
+            spectralAmbush ? 0.1 : 0.07,
+            "square",
+            0.035,
+            spectralAmbush ? 140 : -120
+          );
           if (enemy.health <= 0) {
             destroyEnemy(enemy, shell.ownerRole ?? getLocalRole());
           } else {
@@ -9101,9 +10376,12 @@
         const verticalGap = target
           ? Math.abs((shell.y ?? 0.86) - ((target.altitude ?? 0) + 0.86))
           : Infinity;
+        const targetHitRadius = target?.hologram
+          ? HOLOGRAPHIC_DECOY.HIT_RADIUS
+          : 1.2;
         if (
           target &&
-          Math.hypot(shell.x - target.x, shell.z - target.z) < 1.2 &&
+          Math.hypot(shell.x - target.x, shell.z - target.z) < targetHitRadius &&
           verticalGap < 1.05
         ) {
           shells.splice(i, 1);
@@ -9348,6 +10626,7 @@
     updateRemotePlayers(dt);
     updateReplicatedWorld(dt);
     if (isWorldAuthority()) updateSupportTurrets(dt);
+    if (isWorldAuthority()) updateHolographicDecoys(dt);
     if (isWorldAuthority()) updateEnemies(dt);
     if (isWorldAuthority()) updateMines(dt);
     updateArmorPowerups();
@@ -9365,7 +10644,15 @@
       coopInvulnerability[role] = Math.max(0, coopInvulnerability[role] - dt);
     }
 
-    if (isWorldAuthority() && enemies.length === 0 && !gameOver) {
+    const survivalInProgress =
+      missionState.type === SCRIPTED_MISSION.SURVIVAL &&
+      !missionState.completed;
+    if (
+      isWorldAuthority() &&
+      enemies.length === 0 &&
+      !survivalInProgress &&
+      !gameOver
+    ) {
       waveBanner -= dt;
       if (!update.nextWaveTimer) update.nextWaveTimer = 1.7;
       update.nextWaveTimer -= dt;
@@ -9464,12 +10751,20 @@
 
   document.addEventListener("keydown", (event) => {
     if (isUpgradeActive()) {
+      const chassisSkill = player.tankId === "bastion"
+        ? "twinCannon"
+        : player.tankId === "scout"
+          ? "holographicDecoy"
+          : player.tankId === "spectre"
+            ? "spectralAmbush"
+            : "";
       const upgradeKeys = {
         Digit1: "speed",
         Digit2: "armor",
         Digit3: "range",
         Digit4: "systems",
-        Digit5: "fireRate"
+        Digit5: "fireRate",
+        Digit6: chassisSkill
       };
       const choice = upgradeKeys[event.code];
       if (choice) {
@@ -9487,8 +10782,12 @@
       activateVectorTurbo();
       deploySupportTurret();
       fireOrbitalBarrage();
+      activatePhaseCloak();
     }
-    if (event.code === "KeyE" && !event.repeat) deploySupportArmor();
+    if (event.code === "KeyE" && !event.repeat) {
+      deploySupportArmor();
+      deployHolographicDecoy();
+    }
     if (
       event.code === "KeyC" &&
       running &&

@@ -2,12 +2,16 @@
   "use strict";
 
   const FIREBASE_VERSION = "12.16.0";
-  const ROOM_VERSION = 3;
+  const ROOM_VERSION = 9;
   const MIN_PLAYERS = 2;
   const MAX_PLAYERS = 3;
   const GUEST_ROLES = ["guest", "guest2"];
   const SEND_INTERVAL = 90;
   const WORLD_SEND_INTERVAL = 100;
+  const SEND_INTERVALS = Object.freeze({
+    player: SEND_INTERVAL,
+    world: WORLD_SEND_INTERVAL
+  });
   const ROOMS_PATH = "battlezone/rooms";
   const ROOM_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   const MAX_PLAYER_NAME_LENGTH = 16;
@@ -18,7 +22,10 @@
     "armor",
     "range",
     "systems",
-    "fireRate"
+    "fireRate",
+    "twinCannon",
+    "holographicDecoy",
+    "spectralAmbush"
   ]);
   const subscribers = new Set();
 
@@ -33,9 +40,13 @@
   let lastSendAt = 0;
   let pendingState = null;
   let sendTimer = 0;
+  let playerWriteInFlight = false;
+  let playerWriteGeneration = 0;
   let lastWorldSendAt = 0;
   let pendingWorldState = null;
   let worldSendTimer = 0;
+  let worldWriteInFlight = false;
+  let worldWriteGeneration = 0;
 
   const session = {
     configured: hasFirebaseConfig(),
@@ -136,7 +147,7 @@
   }
 
   function normalizePlayerTankId(tankId) {
-    return ["scout", "bastion", "support"].includes(tankId)
+    return ["scout", "bastion", "support", "spectre"].includes(tankId)
       ? tankId
       : "scout";
   }
@@ -190,6 +201,10 @@
   }
 
   function discardPendingMissionState() {
+    playerWriteGeneration += 1;
+    worldWriteGeneration += 1;
+    playerWriteInFlight = false;
+    worldWriteInFlight = false;
     pendingState = null;
     pendingWorldState = null;
     if (sendTimer) window.clearTimeout(sendTimer);
@@ -236,7 +251,17 @@
 
     roomUnsubscribes.push(
       onValue(ref(database, `${roomPath}/meta`), (snapshot) => {
-        session.meta = snapshot.val();
+        const previousMissionId = normalizeMissionId(session.meta?.missionId);
+        const previousStatus = session.meta?.status;
+        const nextMeta = snapshot.val();
+        const nextMissionId = normalizeMissionId(nextMeta?.missionId);
+        if (
+          (previousMissionId && nextMissionId !== previousMissionId) ||
+          (previousStatus === "playing" && nextMeta?.status !== "playing")
+        ) {
+          discardPendingMissionState();
+        }
+        session.meta = nextMeta;
         if (!session.meta) {
           session.error = "Ce salon n'existe plus.";
           session.phase = "error";
@@ -454,8 +479,15 @@
     });
   }
 
+  function schedulePlayerStateFlush() {
+    if (!pendingState || sendTimer || playerWriteInFlight) return;
+    const wait = Math.max(0, SEND_INTERVAL - (performance.now() - lastSendAt));
+    sendTimer = window.setTimeout(flushPlayerState, wait);
+  }
+
   async function flushPlayerState() {
     sendTimer = 0;
+    if (playerWriteInFlight) return;
     if (
       !pendingState ||
       !playerRef ||
@@ -469,13 +501,22 @@
     }
     const nextState = pendingState;
     pendingState = null;
+    const writeGeneration = playerWriteGeneration;
+    const activePlayerRef = playerRef;
+    playerWriteInFlight = true;
     lastSendAt = performance.now();
     const { update } = firebase.databaseModule;
     try {
-      await update(playerRef, { state: nextState });
+      await update(activePlayerRef, { state: nextState });
     } catch (error) {
-      session.error = readableError(error);
-      emit();
+      if (writeGeneration === playerWriteGeneration) {
+        session.error = readableError(error);
+        emit();
+      }
+    } finally {
+      if (writeGeneration !== playerWriteGeneration) return;
+      playerWriteInFlight = false;
+      schedulePlayerStateFlush();
     }
   }
 
@@ -500,6 +541,7 @@
       shotZ: Number(state.shotZ.toFixed(3)),
       shotYaw: Number(state.shotYaw.toFixed(4)),
       shotTankId: normalizePlayerTankId(state.shotTankId),
+      shotEmpowered: Boolean(state.shotEmpowered),
       turretDeploySequence: Math.max(
         0,
         Math.floor(Number(state.turretDeploySequence) || 0)
@@ -520,6 +562,13 @@
       orbitalX: Number(state.orbitalX.toFixed(3)),
       orbitalZ: Number(state.orbitalZ.toFixed(3)),
       orbitalYaw: Number(state.orbitalYaw.toFixed(4)),
+      decoyDeploySequence: Math.max(
+        0,
+        Math.floor(Number(state.decoyDeploySequence) || 0)
+      ),
+      decoyX: Number(state.decoyX.toFixed(3)),
+      decoyZ: Number(state.decoyZ.toFixed(3)),
+      decoyHeading: Number(state.decoyHeading.toFixed(4)),
       supportDeployTimer: Math.max(
         0,
         Number((state.supportDeployTimer || 0).toFixed(3))
@@ -527,6 +576,10 @@
       scoutTurboTimer: Math.max(
         0,
         Number((state.scoutTurboTimer || 0).toFixed(3))
+      ),
+      phaseCloakTimer: Math.max(
+        0,
+        Number((state.phaseCloakTimer || 0).toFixed(3))
       ),
       pulseSequence: state.pulseSequence,
       pulseX: Number(state.pulseX.toFixed(3)),
@@ -546,15 +599,36 @@
         0,
         Math.floor(Number(state.upgradeFireRate) || 0)
       ),
+      upgradeTwinCannon: Math.max(
+        0,
+        Math.min(1, Math.floor(Number(state.upgradeTwinCannon) || 0))
+      ),
+      upgradeHolographicDecoy: Math.max(
+        0,
+        Math.min(1, Math.floor(Number(state.upgradeHolographicDecoy) || 0))
+      ),
+      upgradeSpectralAmbush: Math.max(
+        0,
+        Math.min(1, Math.floor(Number(state.upgradeSpectralAmbush) || 0))
+      ),
       updatedAt: Date.now()
     };
 
-    const wait = Math.max(0, SEND_INTERVAL - (performance.now() - lastSendAt));
-    if (!sendTimer) sendTimer = window.setTimeout(flushPlayerState, wait);
+    schedulePlayerStateFlush();
+  }
+
+  function scheduleWorldStateFlush() {
+    if (!pendingWorldState || worldSendTimer || worldWriteInFlight) return;
+    const wait = Math.max(
+      0,
+      WORLD_SEND_INTERVAL - (performance.now() - lastWorldSendAt)
+    );
+    worldSendTimer = window.setTimeout(flushWorldState, wait);
   }
 
   async function flushWorldState() {
     worldSendTimer = 0;
+    if (worldWriteInFlight) return;
     if (
       !pendingWorldState ||
       !firebase ||
@@ -569,13 +643,22 @@
     }
     const nextWorld = pendingWorldState;
     pendingWorldState = null;
+    const writeGeneration = worldWriteGeneration;
+    const activeRoomCode = session.roomCode;
+    worldWriteInFlight = true;
     lastWorldSendAt = performance.now();
     const { ref, set } = firebase.databaseModule;
     try {
-      await set(ref(database, `${ROOMS_PATH}/${session.roomCode}/world`), nextWorld);
+      await set(ref(database, `${ROOMS_PATH}/${activeRoomCode}/world`), nextWorld);
     } catch (error) {
-      session.error = readableError(error);
-      emit();
+      if (writeGeneration === worldWriteGeneration) {
+        session.error = readableError(error);
+        emit();
+      }
+    } finally {
+      if (writeGeneration !== worldWriteGeneration) return;
+      worldWriteInFlight = false;
+      scheduleWorldStateFlush();
     }
   }
 
@@ -588,13 +671,7 @@
     const missionId = normalizeMissionId(world?.missionId);
     if (!missionId || missionId !== normalizeMissionId(session.meta?.missionId)) return;
     pendingWorldState = world;
-    const wait = Math.max(
-      0,
-      WORLD_SEND_INTERVAL - (performance.now() - lastWorldSendAt)
-    );
-    if (!worldSendTimer) {
-      worldSendTimer = window.setTimeout(flushWorldState, wait);
-    }
+    scheduleWorldStateFlush();
   }
 
   async function leaveRoom() {
@@ -663,6 +740,7 @@
     leaveRoom,
     subscribe,
     getState: publicState,
+    sendIntervals: SEND_INTERVALS,
     normalizeRoomCode,
     normalizePlayerName
   };

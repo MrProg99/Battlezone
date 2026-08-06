@@ -4211,7 +4211,7 @@
       bottomHeight,
       consoleTop: height - bottomHeight,
       sideWidth,
-      topRail: compact ? 16 : 21,
+      topRail: compact ? 20 : 30,
       radarRadius,
       radarX: width - sideWidth - radarRadius - (compact ? 7 : 14),
       radarY: height - bottomHeight * 0.52
@@ -4249,12 +4249,16 @@
     drawPanel([
       [0, 0],
       [width, 0],
-      [width, topRail],
-      [width * 0.7, topRail],
-      [width * 0.67, topRail * 0.58],
-      [width * 0.33, topRail * 0.58],
-      [width * 0.3, topRail],
-      [0, topRail]
+      [width, topRail * 0.72],
+      [width * 0.76, topRail * 0.72],
+      [width * 0.72, topRail],
+      [width * 0.66, topRail],
+      [width * 0.63, topRail * 0.48],
+      [width * 0.37, topRail * 0.48],
+      [width * 0.34, topRail],
+      [width * 0.28, topRail],
+      [width * 0.24, topRail * 0.72],
+      [0, topRail * 0.72]
     ]);
 
     drawPanel([
@@ -4264,7 +4268,7 @@
       [sideWidth * 0.72, consoleTop - 36],
       [sideWidth + 10, consoleTop + 12],
       [0, consoleTop + 22]
-    ]);
+    ], "rgba(2, 13, 7, 0.94)");
     drawPanel([
       [width, topRail],
       [width - sideWidth - (compact ? 8 : 18), topRail],
@@ -4272,7 +4276,7 @@
       [width - sideWidth * 0.72, consoleTop - 36],
       [width - sideWidth - 10, consoleTop + 12],
       [width, consoleTop + 22]
-    ]);
+    ], "rgba(2, 13, 7, 0.94)");
 
     drawPanel([
       [0, consoleTop + 14],
@@ -4299,6 +4303,29 @@
     ctx.moveTo(width * 0.7, consoleTop + 8);
     ctx.lineTo(width, consoleTop + 22);
     ctx.stroke();
+
+    ctx.globalAlpha = 0.34;
+    ctx.strokeStyle = COLORS.green;
+    const sideSpan = consoleTop - topRail - 44;
+    for (const ratio of [0.18, 0.38, 0.58, 0.78]) {
+      const y = topRail + 18 + sideSpan * ratio;
+      const leftInner =
+        sideWidth + (compact ? 6 : 13) - sideWidth * 0.2 * ratio;
+      const rightInner = width - leftInner;
+      ctx.beginPath();
+      ctx.moveTo(7, y + 8);
+      ctx.lineTo(leftInner - 5, y);
+      ctx.lineTo(leftInner + 2, y + 11);
+      ctx.moveTo(width - 7, y + 8);
+      ctx.lineTo(rightInner + 5, y);
+      ctx.lineTo(rightInner - 2, y + 11);
+      ctx.stroke();
+    }
+
+    ctx.globalAlpha = 0.2;
+    ctx.fillStyle = COLORS.green;
+    ctx.fillRect(4, topRail + 18, 2, consoleTop - topRail - 50);
+    ctx.fillRect(width - 6, topRail + 18, 2, consoleTop - topRail - 50);
 
     ctx.fillStyle = damaged ? COLORS.red : COLORS.green;
     ctx.globalAlpha = damaged ? warningPulse : 0.38;
@@ -5008,6 +5035,345 @@
     ctx.restore();
   }
 
+  function drawUpperHudPanel(x, y, panelWidth, panelHeight, accent = COLORS.green) {
+    const cut = Math.min(10, panelWidth * 0.06);
+    ctx.save();
+    ctx.fillStyle = "rgba(1, 9, 5, 0.88)";
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x + cut, y);
+    ctx.lineTo(x + panelWidth - cut, y);
+    ctx.lineTo(x + panelWidth, y + cut);
+    ctx.lineTo(x + panelWidth, y + panelHeight - 5);
+    ctx.lineTo(x + panelWidth - 5, y + panelHeight);
+    ctx.lineTo(x + 5, y + panelHeight);
+    ctx.lineTo(x, y + panelHeight - 5);
+    ctx.lineTo(x, y + cut);
+    ctx.closePath();
+    ctx.fill();
+    ctx.globalAlpha = 0.62;
+    ctx.stroke();
+
+    ctx.globalAlpha = 0.74;
+    ctx.fillStyle = accent;
+    ctx.fillRect(x + cut, y, panelWidth - cut * 2, 2);
+    ctx.globalAlpha = 0.12;
+    for (let lineY = y + 18; lineY < y + panelHeight - 5; lineY += 9) {
+      ctx.fillRect(x + 5, lineY, panelWidth - 10, 1);
+    }
+    ctx.globalAlpha = 0.7;
+    ctx.beginPath();
+    ctx.moveTo(x, y + 15);
+    ctx.lineTo(x + 7, y + 15);
+    ctx.moveTo(x + panelWidth - 7, y + 15);
+    ctx.lineTo(x + panelWidth, y + 15);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawUpperHudStatusRow(x, y, rowWidth, row, compact) {
+    const keyWidth = compact ? 20 : 27;
+    const keyHeight = compact ? 10 : 12;
+    const color = row.color ?? COLORS.green;
+    ctx.save();
+    ctx.font = `bold ${compact ? 6 : 8}px Courier New`;
+    ctx.textBaseline = "middle";
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = 0.68;
+    ctx.strokeRect(x, y - keyHeight / 2, keyWidth, keyHeight);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = color;
+    ctx.textAlign = "center";
+    ctx.fillText(row.key, x + keyWidth / 2, y + 0.5);
+    ctx.textAlign = "left";
+    ctx.fillText(
+      compact ? row.compactLabel ?? row.label : row.label,
+      x + keyWidth + (compact ? 4 : 7),
+      y + 0.5
+    );
+    ctx.textAlign = "right";
+    ctx.fillStyle = row.valueColor ?? color;
+    ctx.fillText(row.value, x + rowWidth, y + 0.5);
+    ctx.restore();
+  }
+
+  function getChassisHudRows(tank, pulseProgress) {
+    const rows = [{
+      key: "RMB",
+      label: "IMPULSION",
+      compactLabel: "IMP",
+      value: pulseProgress >= 1 ? "PRÊTE" : `${Math.ceil(player.pulseCooldown)}s`,
+      color: pulseProgress >= 1 ? COLORS.cyan : COLORS.dim
+    }];
+
+    if (tank.id === "support") {
+      const turretStatus = player.supportDeployTimer > 0
+        ? `${player.supportDeployTimer.toFixed(1)}s`
+        : player.supportTurretCooldown <= 0
+          ? "PRÊTE"
+          : `${Math.ceil(player.supportTurretCooldown)}s`;
+      rows.push({
+        key: "Q",
+        label: "TOURELLE",
+        compactLabel: "TOUR",
+        value: turretStatus,
+        color: player.supportTurretCooldown <= 0 ? COLORS.cyan : COLORS.dim
+      }, {
+        key: "E",
+        label: "MODULE ARMURE",
+        compactLabel: "ARM",
+        value: player.supportArmorCooldown <= 0
+          ? "PRÊT"
+          : `${Math.ceil(player.supportArmorCooldown)}s`,
+        color: player.supportArmorCooldown <= 0 ? COLORS.cyan : COLORS.dim
+      });
+    } else if (tank.id === "bastion") {
+      const twinCannon = getRoleUpgrades(getLocalRole()).twinCannon > 0;
+      rows.push({
+        key: "Q",
+        label: "BOMBARDEMENT",
+        compactLabel: "ORBIT",
+        value: player.orbitalCooldown <= 0
+          ? "PRÊT"
+          : `${Math.ceil(player.orbitalCooldown)}s`,
+        color: player.orbitalCooldown <= 0 ? COLORS.cyan : COLORS.dim
+      }, {
+        key: "MOD",
+        label: "CANON JUMELÉ",
+        compactLabel: "2X CAN",
+        value: twinCannon ? "ACTIF" : "NON ÉQUIPÉ",
+        color: twinCannon ? COLORS.amber : COLORS.dim
+      });
+    } else if (tank.id === "scout") {
+      const decoyUnlocked = getRoleUpgrades(getLocalRole()).holographicDecoy > 0;
+      const activeDecoy = holographicDecoys.find(
+        (decoy) =>
+          decoy.ownerRole === getLocalRole() &&
+          decoy.health > 0 &&
+          decoy.life > 0
+      );
+      rows.push({
+        key: "Q",
+        label: "TURBO VECTORIEL",
+        compactLabel: "TURBO",
+        value: player.scoutTurboTimer > 0
+          ? `${player.scoutTurboTimer.toFixed(1)}s`
+          : player.scoutTurboCooldown <= 0
+            ? "PRÊT"
+            : `${Math.ceil(player.scoutTurboCooldown)}s`,
+        color:
+          player.scoutTurboTimer > 0 || player.scoutTurboCooldown <= 0
+            ? COLORS.cyan
+            : COLORS.dim
+      }, {
+        key: "E",
+        label: "LEURRE HOLOGRAPHIQUE",
+        compactLabel: "LEURRE",
+        value: !decoyUnlocked
+          ? "NON ÉQUIPÉ"
+          : activeDecoy
+            ? `${Math.ceil(activeDecoy.life)}s`
+            : player.holographicDecoyCooldown <= 0
+              ? "PRÊT"
+              : `${Math.ceil(player.holographicDecoyCooldown)}s`,
+        color:
+          decoyUnlocked && (activeDecoy || player.holographicDecoyCooldown <= 0)
+            ? COLORS.cyan
+            : COLORS.dim
+      });
+    } else if (tank.id === "spectre") {
+      const ambushUnlocked = getRoleUpgrades(getLocalRole()).spectralAmbush > 0;
+      rows.push({
+        key: "Q",
+        label: "CAMOUFLAGE DE PHASE",
+        compactLabel: "CAMO",
+        value: player.phaseCloakTimer > 0
+          ? `${player.phaseCloakTimer.toFixed(1)}s`
+          : player.phaseCloakCooldown <= 0
+            ? "PRÊT"
+            : `${Math.ceil(player.phaseCloakCooldown)}s`,
+        color:
+          player.phaseCloakTimer > 0 || player.phaseCloakCooldown <= 0
+            ? COLORS.cyan
+            : COLORS.dim
+      }, {
+        key: "MOD",
+        label: "EMBUSCADE SPECTRALE",
+        compactLabel: "EMBUSC",
+        value: !ambushUnlocked
+          ? "NON ÉQUIPÉ"
+          : player.spectralAmbushTimer > 0
+            ? `${player.spectralAmbushTimer.toFixed(1)}s`
+            : "EN ATTENTE",
+        color:
+          ambushUnlocked && player.spectralAmbushTimer > 0
+            ? COLORS.violet
+            : COLORS.dim
+      });
+    }
+    return rows;
+  }
+
+  function getMissionInterfaceLabel() {
+    const labels = {
+      [SCRIPTED_MISSION.STANDARD]: "ÉLIMINATION",
+      [SCRIPTED_MISSION.DEFEND]: "DÉFENSE RELAIS",
+      [SCRIPTED_MISSION.STEALTH]: "CHASSE FANTÔME",
+      [SCRIPTED_MISSION.DEMOLITION]: "DÉMOLITION",
+      [SCRIPTED_MISSION.TRAIN]: "INTERCEPTION",
+      [SCRIPTED_MISSION.MINEFIELD]: "CHAMP DE MINES",
+      [SCRIPTED_MISSION.SURVIVAL]: "SURVIE",
+      [SCRIPTED_MISSION.GENERATORS]: "GÉNÉRATEURS"
+    };
+    return labels[missionState.type] ?? "OPÉRATION";
+  }
+
+  function drawUpperCockpitHud(layout, tank, range, coop, pulseProgress) {
+    const { compact, sideWidth, topRail } = layout;
+    const centralWidth = Math.min(compact ? 260 : 430, width * 0.46);
+    const centralHeight = compact ? 35 : 45;
+    const centralX = (width - centralWidth) / 2;
+    const centralY = 3;
+    drawUpperHudPanel(centralX, centralY, centralWidth, centralHeight, COLORS.green);
+
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.fillStyle = COLORS.dim;
+    ctx.font = `bold ${compact ? 6 : 7}px Courier New`;
+    ctx.fillText(
+      `LIAISON TACTIQUE // ${missionPhase === MISSION_PHASE.COMBAT ? "COMBAT" : "DÉPLOIEMENT"}`,
+      width / 2,
+      centralY + (compact ? 9 : 11)
+    );
+    ctx.font = `900 ${compact ? 8 : 11}px Courier New`;
+    ctx.fillStyle = COLORS.green;
+    ctx.fillText(
+      `VAGUE ${String(player.wave).padStart(2, "0")}`,
+      width / 2,
+      centralY + (compact ? 23 : 29)
+    );
+    ctx.font = `bold ${compact ? 6 : 8}px Courier New`;
+    ctx.fillStyle = COLORS.amber;
+    ctx.textAlign = "left";
+    ctx.fillText(
+      compact
+        ? `S ${String(player.score).padStart(5, "0")}`
+        : `SCORE ${String(player.score).padStart(6, "0")}`,
+      centralX + (compact ? 10 : 16),
+      centralY + (compact ? 23 : 29)
+    );
+    ctx.textAlign = "right";
+    ctx.fillStyle = enemies.length > 0 ? COLORS.red : COLORS.green;
+    ctx.fillText(
+      compact
+        ? `C ${String(enemies.length).padStart(2, "0")}`
+        : `CIBLES ${String(enemies.length).padStart(2, "0")}`,
+      centralX + centralWidth - (compact ? 10 : 16),
+      centralY + (compact ? 23 : 29)
+    );
+    ctx.restore();
+
+    const panelWidth = Math.min(compact ? 178 : 246, width * 0.32);
+    const panelHeight = compact ? 68 : 88;
+    const panelY = compact ? topRail + 22 : topRail + 14;
+    const leftX = sideWidth + (compact ? 6 : 17);
+    const rightX = width - sideWidth - (compact ? 6 : 17) - panelWidth;
+    drawUpperHudPanel(leftX, panelY, panelWidth, panelHeight, COLORS.amber);
+    drawUpperHudPanel(rightX, panelY, panelWidth, panelHeight, COLORS.cyan);
+
+    ctx.save();
+    ctx.font = `bold ${compact ? 7 : 9}px Courier New`;
+    ctx.fillStyle = COLORS.amber;
+    ctx.textAlign = "left";
+    ctx.fillText(
+      compact ? tank.label : `CHÂSSIS // ${tank.label}`,
+      leftX + (compact ? 7 : 10),
+      panelY + (compact ? 12 : 15)
+    );
+    ctx.textAlign = "right";
+    ctx.fillStyle = COLORS.green;
+    ctx.fillText(
+      `${range}m`,
+      leftX + panelWidth - (compact ? 7 : 10),
+      panelY + (compact ? 12 : 15)
+    );
+
+    ctx.textAlign = "left";
+    ctx.fillStyle = COLORS.cyan;
+    ctx.fillText(
+      compact ? "TACTIQUE" : "SITUATION // TACTIQUE",
+      rightX + (compact ? 7 : 10),
+      panelY + (compact ? 12 : 15)
+    );
+    const headingDegrees = Math.round(
+      ((player.heading * 180) / Math.PI + 360) % 360
+    );
+    ctx.textAlign = "right";
+    ctx.fillStyle = COLORS.green;
+    ctx.fillText(
+      `CAP ${String(headingDegrees).padStart(3, "0")}°`,
+      rightX + panelWidth - (compact ? 7 : 10),
+      panelY + (compact ? 12 : 15)
+    );
+    ctx.restore();
+
+    const rowStartY = panelY + (compact ? 28 : 33);
+    const rowStep = compact ? 15 : 18;
+    const rowInset = compact ? 7 : 10;
+    const rowWidth = panelWidth - rowInset * 2;
+    const chassisRows = getChassisHudRows(tank, pulseProgress);
+    chassisRows.slice(0, 3).forEach((row, index) => {
+      drawUpperHudStatusRow(
+        leftX + rowInset,
+        rowStartY + index * rowStep,
+        rowWidth,
+        row,
+        compact
+      );
+    });
+
+    let nearestRange = Infinity;
+    for (const enemy of enemies) {
+      nearestRange = Math.min(nearestRange, distance(player, enemy) * 10);
+    }
+    const environmentLabel = environmentState.type === ENVIRONMENT.FOG
+      ? "BROUILLARD"
+      : environmentState.type === ENVIRONMENT.RAIN
+        ? "PLUIE"
+        : "VISIBILITÉ OK";
+    const tacticalRows = [{
+      key: "OBJ",
+      label: getMissionInterfaceLabel(),
+      compactLabel: "MISSION",
+      value: missionState.active ? "ACTIVE" : "STANDARD",
+      color: missionState.active ? COLORS.amber : COLORS.green
+    }, {
+      key: "PROX",
+      label: "MENACE LA PLUS PROCHE",
+      compactLabel: "MENACE",
+      value: Number.isFinite(nearestRange) ? `${Math.round(nearestRange)}m` : "AUCUNE",
+      color: Number.isFinite(nearestRange) ? COLORS.red : COLORS.green
+    }, {
+      key: "NET",
+      label: coop ? "ESCOUADE CONNECTÉE" : environmentLabel,
+      compactLabel: coop ? "ESCOUADE" : "ENV",
+      value: coop
+        ? `${networkSnapshot.playerCount}/${MAX_COOP_PLAYERS}`
+        : "STABLE",
+      color: coop ? COLORS.cyan : COLORS.green
+    }];
+    tacticalRows.forEach((row, index) => {
+      drawUpperHudStatusRow(
+        rightX + rowInset,
+        rowStartY + index * rowStep,
+        rowWidth,
+        row,
+        compact
+      );
+    });
+  }
+
   function drawHud() {
     const layout = getCockpitLayout();
     const { compact, consoleTop, sideWidth, radarX, radarRadius } = layout;
@@ -5028,154 +5394,12 @@
     );
     const armorCharge = Math.round(getRoleArmor(getLocalRole()));
 
-    ctx.save();
-    ctx.font = `${compact ? 7 : 9}px Courier New`;
-    ctx.fillStyle = COLORS.amber;
-    ctx.textAlign = "left";
-    ctx.fillText(
-      compact ? `${tank.label} ${range}m` : `${tank.label} // PORTEE ${range}m`,
-      sideWidth + (compact ? 5 : 12),
-      compact ? 12 : 15
-    );
     const pulseProgress = Math.max(
       0,
       1 - player.pulseCooldown / SHOCK_PULSE.RELOAD_TIME
     );
-    ctx.fillStyle = pulseProgress >= 1 ? COLORS.cyan : COLORS.dim;
-    ctx.fillText(
-      compact
-        ? `IMP ${pulseProgress >= 1 ? "OK" : `${Math.ceil(player.pulseCooldown)}s`}`
-        : `IMPULSION ${pulseProgress >= 1 ? "PRETE" : `${Math.ceil(player.pulseCooldown)}s`}`,
-      sideWidth + (compact ? 5 : 12),
-      compact ? 22 : 29
-    );
-    if (tank.id === "support") {
-      const turretStatus = player.supportDeployTimer > 0
-        ? `DEPLOIEMENT ${player.supportDeployTimer.toFixed(1)}s`
-        : player.supportTurretCooldown <= 0
-          ? "PRETE"
-          : `${Math.ceil(player.supportTurretCooldown)}s`;
-      const armorStatus = player.supportArmorCooldown <= 0
-        ? "PRETE"
-        : `${Math.ceil(player.supportArmorCooldown)}s`;
-      ctx.fillStyle = player.supportTurretCooldown <= 0 ? COLORS.cyan : COLORS.dim;
-      ctx.fillText(
-        compact ? `Q TUR ${turretStatus}` : `Q TOURELLE // ${turretStatus}`,
-        sideWidth + (compact ? 5 : 12),
-        compact ? 32 : 43
-      );
-      ctx.fillStyle = player.supportArmorCooldown <= 0 ? COLORS.cyan : COLORS.dim;
-      ctx.fillText(
-        compact ? `E ARM ${armorStatus}` : `E ARMURE // ${armorStatus}`,
-        sideWidth + (compact ? 5 : 12),
-        compact ? 42 : 56
-      );
-    }
-    if (tank.id === "bastion") {
-      const orbitalStatus = player.orbitalCooldown <= 0
-        ? "PRET"
-        : `${Math.ceil(player.orbitalCooldown)}s`;
-      ctx.fillStyle = player.orbitalCooldown <= 0 ? COLORS.cyan : COLORS.dim;
-      ctx.fillText(
-        compact ? `Q ORB ${orbitalStatus}` : `Q BOMBARDEMENT // ${orbitalStatus}`,
-        sideWidth + (compact ? 5 : 12),
-        compact ? 32 : 43
-      );
-    }
-    if (tank.id === "scout") {
-      const turboStatus = player.scoutTurboTimer > 0
-        ? `ACTIF ${player.scoutTurboTimer.toFixed(1)}s`
-        : player.scoutTurboCooldown <= 0
-          ? "PRET"
-          : `${Math.ceil(player.scoutTurboCooldown)}s`;
-      ctx.fillStyle = player.scoutTurboTimer > 0 || player.scoutTurboCooldown <= 0
-        ? COLORS.cyan
-        : COLORS.dim;
-      ctx.fillText(
-        compact ? `Q VEC ${turboStatus}` : `Q TURBO VECTORIEL // ${turboStatus}`,
-        sideWidth + (compact ? 5 : 12),
-        compact ? 32 : 43
-      );
-      if (getRoleUpgrades(getLocalRole()).holographicDecoy > 0) {
-        const activeDecoy = holographicDecoys.find(
-          (decoy) =>
-            decoy.ownerRole === getLocalRole() &&
-            decoy.health > 0 &&
-            decoy.life > 0
-        );
-        const decoyStatus = activeDecoy
-          ? `ACTIF ${Math.ceil(activeDecoy.life)}s`
-          : player.holographicDecoyCooldown <= 0
-            ? "PRET"
-            : `${Math.ceil(player.holographicDecoyCooldown)}s`;
-        ctx.fillStyle = activeDecoy || player.holographicDecoyCooldown <= 0
-          ? COLORS.cyan
-          : COLORS.dim;
-        ctx.fillText(
-          compact ? `E LEU ${decoyStatus}` : `E LEURRE // ${decoyStatus}`,
-          sideWidth + (compact ? 5 : 12),
-          compact ? 42 : 56
-        );
-      }
-      if (getRoleUpgrades(getLocalRole()).twinCannon > 0) {
-        ctx.fillStyle = COLORS.amber;
-        ctx.fillText(
-          compact ? "2X CANON ACTIF" : "CANON JUMELÉ // ACTIF",
-          sideWidth + (compact ? 5 : 12),
-          compact ? 42 : 56
-        );
-      }
-    }
-    if (tank.id === "spectre") {
-      const cloakStatus = player.phaseCloakTimer > 0
-        ? `ACTIF ${player.phaseCloakTimer.toFixed(1)}s`
-        : player.phaseCloakCooldown <= 0
-          ? "PRET"
-          : `${Math.ceil(player.phaseCloakCooldown)}s`;
-      ctx.fillStyle = player.phaseCloakTimer > 0 || player.phaseCloakCooldown <= 0
-        ? COLORS.cyan
-        : COLORS.dim;
-      ctx.fillText(
-        compact ? `Q CAM ${cloakStatus}` : `Q CAMOUFLAGE // ${cloakStatus}`,
-        sideWidth + (compact ? 5 : 12),
-        compact ? 32 : 43
-      );
-      if (getRoleUpgrades(getLocalRole()).spectralAmbush > 0) {
-        const ambushStatus = player.spectralAmbushTimer > 0
-          ? `CHARGÉ ${player.spectralAmbushTimer.toFixed(1)}s`
-          : "EN ATTENTE";
-        ctx.fillStyle = player.spectralAmbushTimer > 0
-          ? COLORS.violet
-          : COLORS.dim;
-        ctx.fillText(
-          compact ? `TIR 2X ${ambushStatus}` : `EMBUSCADE // ${ambushStatus}`,
-          sideWidth + (compact ? 5 : 12),
-          compact ? 42 : 56
-        );
-      }
-    }
-    ctx.fillStyle = COLORS.green;
-    ctx.textAlign = "center";
-    ctx.fillText(
-      compact
-        ? `S${String(player.score).padStart(5, "0")} V${String(player.wave).padStart(2, "0")} C${String(enemies.length).padStart(2, "0")}`
-        : `SCORE ${String(player.score).padStart(6, "0")} // VAGUE ${String(player.wave).padStart(2, "0")} // CIBLES ${String(enemies.length).padStart(2, "0")}`,
-      width * 0.5,
-      compact ? 12 : 15
-    );
-    ctx.textAlign = "right";
-    ctx.fillStyle = coop ? COLORS.cyan : COLORS.green;
-    ctx.fillText(
-      coop
-        ? compact
-          ? `COOP ${networkSnapshot.playerCount}/${MAX_COOP_PLAYERS}`
-          : `COOP ${networkSnapshot.playerCount}/${MAX_COOP_PLAYERS} // ${networkSnapshot.roomCode}`
-        : compact
-          ? "SYS OK"
-          : "SYSTEMES NOMINAUX",
-      width - sideWidth - (compact ? 5 : 12),
-      compact ? 12 : 15
-    );
+    ctx.save();
+    drawUpperCockpitHud(layout, tank, range, coop, pulseProgress);
 
     const gaugeHeight = compact ? 22 : 28;
     const gaugeGap = compact ? 3 : 5;
@@ -5415,7 +5639,13 @@
     ctx.fillText(
       `⚠ IMPACT ARTILLERIE ${Math.max(0, incoming.life).toFixed(1)}s ⚠`,
       width / 2,
-      88
+      missionState.active
+        ? enemies.some((enemy) => getEnemyType(enemy).boss)
+          ? 158
+          : 120
+        : enemies.some((enemy) => getEnemyType(enemy).boss)
+          ? 112
+          : 75
     );
     ctx.restore();
   }
@@ -5455,7 +5685,7 @@
     const progress = Math.max(0, Math.min(1, boss.health / boss.maxHealth));
     const barWidth = Math.min(360, width * 0.48);
     const barX = (width - barWidth) / 2;
-    const barY = 38;
+    const barY = 72;
     const color = enraged ? COLORS.red : COLORS.amber;
 
     ctx.save();
@@ -5482,7 +5712,7 @@
     if (!missionState.active) return;
     const barWidth = Math.min(390, width * 0.52);
     const barX = (width - barWidth) / 2;
-    const barY = 70;
+    const barY = enemies.some((enemy) => getEnemyType(enemy).boss) ? 112 : 72;
     let color = COLORS.cyan;
     let label = "";
     let progress = null;
@@ -5624,13 +5854,13 @@
     ctx.textAlign = "center";
     ctx.fillStyle = COLORS.amber;
     ctx.font = "10px Courier New";
-    ctx.fillText(`LARGAGE TACTIQUE // ${tank.label}`, centerX, 32);
+    ctx.fillText(`LARGAGE TACTIQUE // ${tank.label}`, centerX, 70);
     ctx.fillStyle = COLORS.green;
     ctx.font = "12px Courier New";
     ctx.fillText(
       `ALT ${String(Math.ceil(player.altitude * 10)).padStart(4, "0")}m   V ${String(Math.round(descentSpeed)).padStart(3, "0")}m/s`,
       centerX,
-      52
+      89
     );
 
     const gaugeHeight = Math.min(260, height * 0.34);

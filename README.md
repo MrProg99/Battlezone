@@ -111,7 +111,7 @@ avec l’ouverture directe de `index.html`, sans installation ni étape de compi
 - `C` : recentrer progressivement la tourelle
 - Clic gauche ou espace : tirer
 - Clic droit : impulsion de choc défensive
-- `Q` avec l’Éclaireur : activer le Turbo vectoriel pendant 4 secondes
+- `Q` avec l’Éclaireur : activer le Turbo vectoriel pendant 4 secondes avec effet
 - `E` avec l’Éclaireur après déblocage : déposer un leurre holographique qui attire les ennemis, absorbe quatre impacts puis explose
 - `Q` avec le Soutien : immobiliser le char 2 secondes et déployer une tourelle automatique pour 10 secondes
 - `Q` avec le Bastion : lancer cinq bombes orbitales dans l'axe de la tourelle

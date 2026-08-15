@@ -128,6 +128,7 @@ avec l’ouverture directe de `index.html`, sans installation ni étape de compi
 - Terrain agrandi avec zones de départ opposées et formation Coop espacée
 - Rampe vectorielle procédurale : position et orientation variables, sens unique, saut physique et synchronisation Coop par la graine du monde
 - Cadre de cockpit blindé avec radar et jauges intégrés
+- Pare-brise endommagé progressivement : fissures supplémentaires sous 62 %, 42 %, 25 % et 12 % de santé
 - Lune vectorielle avec cratères, croissant et parallaxe dans le ciel
 - Largage aérien du tank avec altimètre et impact au sol
 - Quatre châssis jouables : l’Éclaireur rapide, le Bastion à longue portée, le Soutien polyvalent et le Spectre d’infiltration

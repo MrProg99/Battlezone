@@ -198,6 +198,40 @@
   let recentLocalPulseVisual = null;
   let latestArmorPickup = null;
   let localUpgradeChoice = "";
+  const WINDSHIELD_CRACKS = Object.freeze([
+    Object.freeze([
+      Object.freeze([[0.18, 0.3], [0.13, 0.22], [0.09, 0.16], [0.06, 0.08]]),
+      Object.freeze([[0.18, 0.3], [0.23, 0.23], [0.29, 0.2], [0.33, 0.13]]),
+      Object.freeze([[0.18, 0.3], [0.12, 0.35], [0.08, 0.43], [0.03, 0.48]]),
+      Object.freeze([[0.18, 0.3], [0.24, 0.34], [0.27, 0.42], [0.34, 0.47]]),
+      Object.freeze([[0.13, 0.22], [0.17, 0.17], [0.18, 0.1]]),
+      Object.freeze([[0.24, 0.34], [0.3, 0.31], [0.36, 0.33]])
+    ]),
+    Object.freeze([
+      Object.freeze([[0.83, 0.39], [0.77, 0.32], [0.74, 0.24], [0.68, 0.18]]),
+      Object.freeze([[0.83, 0.39], [0.89, 0.34], [0.94, 0.27], [0.98, 0.2]]),
+      Object.freeze([[0.83, 0.39], [0.78, 0.45], [0.74, 0.54], [0.68, 0.61]]),
+      Object.freeze([[0.83, 0.39], [0.88, 0.46], [0.91, 0.56], [0.97, 0.62]]),
+      Object.freeze([[0.77, 0.32], [0.82, 0.27], [0.84, 0.2]]),
+      Object.freeze([[0.78, 0.45], [0.83, 0.51], [0.84, 0.59]])
+    ]),
+    Object.freeze([
+      Object.freeze([[0.45, 0.15], [0.39, 0.11], [0.34, 0.05]]),
+      Object.freeze([[0.45, 0.15], [0.51, 0.1], [0.57, 0.04]]),
+      Object.freeze([[0.45, 0.15], [0.42, 0.23], [0.44, 0.32], [0.4, 0.41]]),
+      Object.freeze([[0.45, 0.15], [0.51, 0.2], [0.56, 0.28], [0.62, 0.31]]),
+      Object.freeze([[0.42, 0.23], [0.35, 0.27], [0.31, 0.34]]),
+      Object.freeze([[0.56, 0.28], [0.53, 0.36], [0.56, 0.43]])
+    ]),
+    Object.freeze([
+      Object.freeze([[0.66, 0.72], [0.59, 0.65], [0.54, 0.58], [0.48, 0.55]]),
+      Object.freeze([[0.66, 0.72], [0.72, 0.65], [0.76, 0.57], [0.82, 0.52]]),
+      Object.freeze([[0.66, 0.72], [0.61, 0.78], [0.57, 0.87], [0.52, 0.94]]),
+      Object.freeze([[0.66, 0.72], [0.72, 0.79], [0.76, 0.88], [0.82, 0.95]]),
+      Object.freeze([[0.59, 0.65], [0.62, 0.57], [0.6, 0.49]]),
+      Object.freeze([[0.72, 0.79], [0.79, 0.76], [0.86, 0.79]])
+    ])
+  ]);
   const upgradeState = {
     active: false,
     round: 0,
@@ -4356,6 +4390,120 @@
     ctx.restore();
   }
 
+  function getWindshieldCrackCount(health = player.health) {
+    if (health <= 12) return 4;
+    if (health <= 25) return 3;
+    if (health <= 42) return 2;
+    if (health <= 62) return 1;
+    return 0;
+  }
+
+  function drawWindshieldDamage(layout) {
+    const crackCount = getWindshieldCrackCount();
+    if (crackCount <= 0) return;
+
+    const { compact, consoleTop, sideWidth, topRail } = layout;
+    const glassLeft = sideWidth + (compact ? 12 : 24);
+    const glassRight = width - glassLeft;
+    const glassTop = topRail + (compact ? 7 : 9);
+    const glassBottom = consoleTop - (compact ? 19 : 24);
+    const glassWidth = glassRight - glassLeft;
+    const glassHeight = glassBottom - glassTop;
+    const severity = Math.max(0, Math.min(1, (62 - player.health) / 62));
+    const damagePulse = Math.max(0, Math.min(1, flash));
+    const transformPoint = ([x, y]) => ({
+      x: glassLeft + x * glassWidth,
+      y: glassTop + y * glassHeight
+    });
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(glassLeft, glassTop);
+    ctx.lineTo(glassRight, glassTop);
+    ctx.lineTo(width - sideWidth - 3, height * 0.32);
+    ctx.lineTo(width - sideWidth * 0.74, consoleTop - 38);
+    ctx.lineTo(width * 0.7, consoleTop - 3);
+    ctx.lineTo(width * 0.3, consoleTop - 3);
+    ctx.lineTo(sideWidth * 0.74, consoleTop - 38);
+    ctx.lineTo(sideWidth + 3, height * 0.32);
+    ctx.closePath();
+    ctx.clip();
+
+    if (crackCount >= 3) {
+      ctx.fillStyle = `rgba(164, 215, 208, ${0.018 + severity * 0.022})`;
+      ctx.fillRect(glassLeft, glassTop, glassWidth, glassHeight);
+    }
+
+    for (let crackIndex = 0; crackIndex < crackCount; crackIndex += 1) {
+      const crack = WINDSHIELD_CRACKS[crackIndex];
+      const crackAlpha =
+        Math.min(0.76, 0.34 + severity * 0.34 + damagePulse * 0.12) *
+        (crackIndex === crackCount - 1 && damagePulse > 0 ? 1 : 0.88);
+
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      for (const branch of crack) {
+        const start = transformPoint(branch[0]);
+        ctx.beginPath();
+        ctx.moveTo(start.x, start.y);
+        for (let pointIndex = 1; pointIndex < branch.length; pointIndex += 1) {
+          const point = transformPoint(branch[pointIndex]);
+          ctx.lineTo(point.x, point.y);
+        }
+        ctx.strokeStyle = `rgba(0, 5, 4, ${0.34 + severity * 0.2})`;
+        ctx.lineWidth = compact ? 2.4 : 3.2;
+        ctx.stroke();
+        ctx.strokeStyle = `rgba(205, 239, 232, ${crackAlpha})`;
+        ctx.lineWidth = compact ? 0.72 : 0.9;
+        ctx.stroke();
+      }
+
+      const center = transformPoint(crack[0][0]);
+      const centerRadius = (compact ? 3.2 : 4.5) + severity * 2;
+      ctx.strokeStyle = `rgba(218, 247, 240, ${crackAlpha * 0.9})`;
+      ctx.lineWidth = compact ? 0.65 : 0.8;
+      ctx.beginPath();
+      for (let ray = 0; ray < 9; ray += 1) {
+        const angle = ray / 9 * TAU + crackIndex * 0.47;
+        const innerRadius = centerRadius * 0.28;
+        const outerRadius = centerRadius * (0.78 + (ray % 3) * 0.2);
+        ctx.moveTo(
+          center.x + Math.cos(angle) * innerRadius,
+          center.y + Math.sin(angle) * innerRadius
+        );
+        ctx.lineTo(
+          center.x + Math.cos(angle) * outerRadius,
+          center.y + Math.sin(angle) * outerRadius
+        );
+      }
+      ctx.stroke();
+    }
+
+    if (crackCount >= 4) {
+      ctx.fillStyle = `rgba(210, 238, 232, ${0.05 + damagePulse * 0.025})`;
+      const chips = [
+        [0.07, 0.1, 0.035, 0.055],
+        [0.94, 0.24, 0.028, 0.07],
+        [0.53, 0.9, 0.045, 0.035]
+      ];
+      for (const [x, y, chipWidth, chipHeight] of chips) {
+        ctx.beginPath();
+        ctx.moveTo(glassLeft + x * glassWidth, glassTop + y * glassHeight);
+        ctx.lineTo(
+          glassLeft + (x + chipWidth) * glassWidth,
+          glassTop + (y + chipHeight * 0.25) * glassHeight
+        );
+        ctx.lineTo(
+          glassLeft + (x + chipWidth * 0.36) * glassWidth,
+          glassTop + (y + chipHeight) * glassHeight
+        );
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
+
   function drawCockpit() {
     const tank = getPlayerTank();
     const light = tank.id === "scout";
@@ -6025,6 +6173,7 @@
     drawFogOverlay();
     drawRainOverlay();
     drawCockpit();
+    drawWindshieldDamage(getCockpitLayout());
     if (missionPhase === MISSION_PHASE.DROP) {
       drawDropHud();
     } else {

@@ -147,7 +147,7 @@
   }
 
   function normalizePlayerTankId(tankId) {
-    return ["scout", "bastion", "support", "spectre"].includes(tankId)
+    return ["scout", "bastion", "support", "spectre", "bombardier"].includes(tankId)
       ? tankId
       : "scout";
   }
@@ -532,6 +532,7 @@
       altitude: Number(state.altitude.toFixed(3)),
       heading: Number(state.heading.toFixed(4)),
       turretOffset: Number(state.turretOffset.toFixed(4)),
+      cannonElevation: Number((Number(state.cannonElevation) || 0).toFixed(4)),
       health: Math.max(0, Math.min(100, Math.round(state.health))),
       missionPhase: state.missionPhase,
       sequence: state.sequence,
@@ -540,6 +541,7 @@
       shotY: Number((Number(state.shotY) || 0.86).toFixed(3)),
       shotZ: Number(state.shotZ.toFixed(3)),
       shotYaw: Number(state.shotYaw.toFixed(4)),
+      shotElevation: Number((Number(state.shotElevation) || 0).toFixed(4)),
       shotTankId: normalizePlayerTankId(state.shotTankId),
       shotEmpowered: Boolean(state.shotEmpowered),
       turretDeploySequence: Math.max(

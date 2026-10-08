@@ -84,7 +84,9 @@ Ce premier jalon synchronise :
 - les déploiements du Soutien, ses tourelles automatiques et ses modules d'armure;
 - le classement Coop des destructions individuelles entre les vagues;
 - le score, les éliminations et le blindage partagé;
-- la fin de mission commune si l’un des chars est détruit.
+- la réapparition individuelle après destruction, avec un nouveau largage aérien
+  et la perte de toutes les optimisations du pilote concerné;
+- la fin de mission commune si un objectif scénarisé échoue.
 
 L’hôte est l’unique autorité de la simulation de combat. Les invités contrôlent
 leur char localement pour conserver une conduite fluide, transmettent leurs tirs,
@@ -108,6 +110,7 @@ avec l’ouverture directe de `index.html`, sans installation ni étape de compi
 - `W` / `S` ou flèches haut / bas : avancer et reculer
 - `A` / `D` ou flèches gauche / droite : tourner le tank
 - Souris : orienter la tourelle
+- Molette avec le Bombardier : régler l'élévation du canon et la portée de l'obus
 - `C` : recentrer progressivement la tourelle
 - Clic gauche ou espace : tirer
 - Clic droit : impulsion de choc défensive
@@ -131,13 +134,14 @@ avec l’ouverture directe de `index.html`, sans installation ni étape de compi
 - Pare-brise endommagé progressivement : fissures supplémentaires sous 62 %, 42 %, 25 % et 12 % de santé
 - Lune vectorielle avec cratères, croissant et parallaxe dans le ciel
 - Largage aérien du tank avec altimètre et impact au sol
-- Quatre châssis jouables : l’Éclaireur rapide, le Bastion à longue portée, le Soutien polyvalent et le Spectre d’infiltration
-- Atelier entre les vagues : propulsion, blindage, portée, cadence du canon, recharge de la capacité propre à chaque châssis, Canon jumelé du Bastion, Leurre holographique du Scout et Embuscade spectrale du Spectre après la première vague
+- Cinq châssis jouables : l’Éclaireur rapide, le Bastion à longue portée, le Bombardier à tir indirect, le Soutien polyvalent et le Spectre d’infiltration
+- Atelier entre les vagues : propulsion, blindage, portée, cadence du canon, systèmes propres au châssis, Canon jumelé du Bastion, Leurre holographique du Scout et Embuscade spectrale du Spectre après la première vague
 - Modules spécialisés limités à cinq niveaux : capacités jusqu’à -40 % de recharge et canon jusqu’à -20 % de temps de rechargement
 - Éclaireur : Turbo vectoriel avec vitesse avant +60 %, accélération doublée, rotation +30 % et recharge de 18 secondes
 - Éclaireur : Leurre holographique déblocable, prioritaire pour les ennemis dans un rayon de 42 mètres, doté de 4 PV et d’une explosion offensive
 - Soutien : vitesse et portée moyennes, tourelle destructible de 3 PV, cadence automatique et module d'armure à recharge longue
 - Bastion : bombardement orbital de cinq impacts successifs avec zones d'avertissement, recharge de 35 secondes et Canon jumelé déblocable qui tire deux obus parallèles
+- Bombardier : angle de 5° à 45° réglable à la molette, trajectoire et zone d'impact prévues sur le terrain, tir lent et explosion de zone; l'amélioration Systèmes augmente le rayon d'explosion
 - Spectre : vitesse et portée élevées, camouflage de phase de 5 secondes, détection ennemie limitée à courte distance et recharge de 22 secondes
 - Spectre : Embuscade spectrale déblocable; la sortie de camouflage charge un tir de 2 dégâts pendant 4 secondes, brise un bouclier Gardien et peut toucher deux tanks alignés
 - Conduite et tourelle indépendantes

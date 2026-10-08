@@ -137,6 +137,15 @@
     BLAST_RADIUS: 3.6,
     BLAST_DAMAGE: 14
   });
+  const BOMBARDIER = Object.freeze({
+    GRAVITY: 17,
+    MIN_ELEVATION: 5 * Math.PI / 180,
+    MAX_ELEVATION: 45 * Math.PI / 180,
+    DEFAULT_ELEVATION: 24 * Math.PI / 180,
+    AIM_STEP: 2 * Math.PI / 180,
+    BLAST_RADIUS: 5.8,
+    BLAST_DAMAGE: 3
+  });
   const ENVIRONMENT = Object.freeze({
     CLEAR: "clear",
     FOG: "fog",
@@ -258,13 +267,15 @@
         scout: "TURBO VECTORIEL",
         bastion: "BOMBARDEMENT",
         support: "DÉPLOIEMENTS",
-        spectre: "CAMOUFLAGE"
+        spectre: "CAMOUFLAGE",
+        bombardier: "CHARGE EXPLOSIVE"
       }),
       tankDescriptions: Object.freeze({
         scout: "RECHARGE TURBO + LEURRE -8 %",
         bastion: "RECHARGE ORBITALE -8 %",
         support: "RECHARGE TOURELLE + ARMURE -8 %",
-        spectre: "RECHARGE CAMOUFLAGE -8 %"
+        spectre: "RECHARGE CAMOUFLAGE -8 %",
+        bombardier: "RAYON D'EXPLOSION +4 m"
       })
     }),
     fireRate: Object.freeze({
@@ -824,6 +835,18 @@
       shellSpeed: 36,
       shellLifetime: 1.72,
       reloadTime: 0.86
+    }),
+    bombardier: Object.freeze({
+      id: "bombardier",
+      label: "BOMBARDIER",
+      forwardSpeed: 7.0,
+      reverseSpeed: 4.2,
+      turnRate: 1.05,
+      acceleration: 2.8,
+      coastResponse: 4.6,
+      shellSpeed: 34,
+      shellLifetime: 4,
+      reloadTime: 2.4
     })
   });
 
@@ -848,6 +871,7 @@
     TRAIN_MISSION,
     MINEFIELD_MISSION,
     BEHEMOTH_MORTAR,
+    BOMBARDIER,
     ENVIRONMENT,
     RAMP_SYSTEM,
     KAMIKAZE_TRIGGER_RADIUS,

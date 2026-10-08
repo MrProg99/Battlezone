@@ -80,6 +80,7 @@
     TRAIN_MISSION,
     MINEFIELD_MISSION,
     BEHEMOTH_MORTAR,
+    BOMBARDIER,
     ENVIRONMENT,
     RAMP_SYSTEM,
     KAMIKAZE_TRIGGER_RADIUS,
@@ -145,6 +146,8 @@
   let alignmentPulse = 0;
   let missionPhase = MISSION_PHASE.IDLE;
   let dropElapsed = 0;
+  let respawnElapsed = -1;
+  let appliedRespawnSequence = 0;
   let landingPulse = 0;
   let enemySerial = 0;
   let shellSerial = 0;
@@ -185,6 +188,7 @@
     y: 0.86,
     z: 4,
     yaw: 0,
+    elevation: BOMBARDIER.DEFAULT_ELEVATION,
     tankId: "scout",
     empowered: false
   };
@@ -270,6 +274,8 @@
     guest: 0,
     guest2: 0
   };
+  const coopRespawnTimers = { host: 0, guest: 0, guest2: 0 };
+  const respawnSequences = { host: 0, guest: 0, guest2: 0 };
   const coopKills = {
     host: 0,
     guest: 0,
@@ -310,6 +316,7 @@
     z: 4,
     heading: 0,
     turretOffset: 0,
+    cannonElevation: BOMBARDIER.DEFAULT_ELEVATION,
     speed: 0,
     health: 100,
     reload: 0,
@@ -433,8 +440,12 @@
       forwardSpeed: tank.forwardSpeed * speedMultiplier,
       reverseSpeed: tank.reverseSpeed * speedMultiplier,
       acceleration: tank.acceleration * (1 + upgrades.speed * 0.05),
+      shellSpeed: tank.shellSpeed * (tank.id === "bombardier" ? Math.sqrt(rangeMultiplier) : 1),
       shellLifetime: tank.shellLifetime * rangeMultiplier,
-      reloadTime: tank.reloadTime * reloadMultiplier
+      reloadTime: tank.reloadTime * reloadMultiplier,
+      blastRadius: tank.id === "bombardier"
+        ? BOMBARDIER.BLAST_RADIUS + upgrades.systems * 0.4
+        : 0
     };
   }
 
@@ -449,7 +460,7 @@
   }
 
   function normalizePlayerTankId(tankId) {
-    return ["scout", "bastion", "support", "spectre"].includes(tankId)
+    return ["scout", "bastion", "support", "spectre", "bombardier"].includes(tankId)
       ? tankId
       : "scout";
   }
@@ -538,6 +549,7 @@
   }
 
   function resetLocalPlayerForWave() {
+    respawnElapsed = -1;
     const formation = getPlayerFormationPosition();
     Object.assign(player, {
       x: formation.x,
@@ -548,6 +560,7 @@
       activeRampId: "",
       heading: formation.heading,
       turretOffset: 0,
+      cannonElevation: BOMBARDIER.DEFAULT_ELEVATION,
       speed: 0,
       reload: 0,
       pulseCooldown: 0,
@@ -571,6 +584,66 @@
     remoteWorldShells.length = 0;
     supportTurrets.length = 0;
     holographicDecoys.length = 0;
+  }
+
+  function beginLocalRespawn() {
+    const role = getLocalRole();
+    playTankExplosionSound(player.x, player.z, 1.2);
+    burst(player.x, player.z, COLORS.red, 34, Math.max(0.4, player.altitude));
+    const formation = getPlayerFormationPosition(role);
+    Object.assign(player, {
+      x: formation.x,
+      z: formation.z,
+      altitude: DROP_SEQUENCE.START_HEIGHT,
+      verticalVelocity: 0,
+      jumping: false,
+      activeRampId: "",
+      heading: formation.heading,
+      turretOffset: 0,
+      cannonElevation: BOMBARDIER.DEFAULT_ELEVATION,
+      speed: 0,
+      health: 100,
+      reload: 0,
+      pulseCooldown: 0,
+      supportDeployTimer: 0,
+      supportTurretCooldown: 0,
+      supportArmorCooldown: 0,
+      orbitalCooldown: 0,
+      scoutTurboTimer: 0,
+      scoutTurboCooldown: 0,
+      scoutTurboTrailTimer: 0,
+      holographicDecoyCooldown: 0,
+      phaseCloakTimer: 0,
+      phaseCloakCooldown: 0,
+      spectralAmbushTimer: 0,
+      invulnerable: 1.2
+    });
+    upgradeState.stats[role] = createUpgradeLevels();
+    coopArmor[role] = 0;
+    if (isWorldAuthority() && isCoopGame()) {
+      coopHealth[role] = 100;
+      respawnSequences[role] += 1;
+    }
+    respawnElapsed = 0;
+    cameraPitch = DROP_SEQUENCE.START_PITCH;
+    recenteringTurret = false;
+    turretWasAligned = true;
+    screenShake = Math.max(screenShake, 18);
+    flash = 1;
+    keys.clear();
+    publishLocalPlayerState(true);
+  }
+
+  function beginRemoteRespawn(role, x, z) {
+    playTankExplosionSound(x, z, 1.2);
+    burst(x, z, COLORS.red, 34);
+    coopHealth[role] = 100;
+    coopArmor[role] = 0;
+    coopInvulnerability[role] = DROP_SEQUENCE.DURATION + 1.2;
+    coopRespawnTimers[role] = DROP_SEQUENCE.DURATION + 0.5;
+    upgradeState.stats[role] = createUpgradeLevels();
+    respawnSequences[role] += 1;
+    publishSharedWorld(true);
   }
 
   function selectPlayerTank(tankId) {
@@ -636,6 +709,10 @@
         altitude: Number(state.altitude) || 0,
         heading: Number(state.heading) || 0,
         turretOffset: Number(state.turretOffset) || 0,
+        cannonElevation: Math.max(BOMBARDIER.MIN_ELEVATION, Math.min(
+          BOMBARDIER.MAX_ELEVATION,
+          Number(state.cannonElevation) || BOMBARDIER.DEFAULT_ELEVATION
+        )),
         health: Number.isFinite(Number(state.health)) ? Number(state.health) : 100,
         missionPhase: state.missionPhase ?? MISSION_PHASE.IDLE,
         shotSequence: Number(state.shotSequence) || 0,
@@ -645,6 +722,10 @@
           : (Number(state.altitude) || 0) + 0.86,
         shotZ: Number(state.shotZ) || Number(state.z) || 0,
         shotYaw: Number(state.shotYaw) || 0,
+        shotElevation: Math.max(BOMBARDIER.MIN_ELEVATION, Math.min(
+          BOMBARDIER.MAX_ELEVATION,
+          Number(state.shotElevation) || BOMBARDIER.DEFAULT_ELEVATION
+        )),
         shotTankId: normalizePlayerTankId(state.shotTankId),
         shotEmpowered: Boolean(state.shotEmpowered),
         pulseSequence: Number(state.pulseSequence) || 0,
@@ -715,7 +796,19 @@
       const remote = remotePlayers.get(uid);
       if (remote) {
         if (
+          missionPhase === MISSION_PHASE.COMBAT &&
+          remote.missionPhase === MISSION_PHASE.COMBAT &&
+          target.missionPhase === MISSION_PHASE.DROP
+        ) {
+          remote.x = target.x;
+          remote.z = target.z;
+          remote.altitude = target.altitude;
+        }
+        const remoteRespawning = target.missionPhase !== MISSION_PHASE.COMBAT ||
+          (isWorldAuthority() && coopRespawnTimers[target.role] > 0);
+        if (
           (isWorldAuthority() || target.role !== "host") &&
+          !remoteRespawning &&
           target.shotSequence > (remote.lastShotSequence ?? 0)
         ) {
           spawnRemotePlayerShot(target);
@@ -726,6 +819,7 @@
         );
         if (
           isWorldAuthority() &&
+          !remoteRespawning &&
           target.role !== "host" &&
           target.pulseSequence > (remote.lastPulseSequence ?? 0)
         ) {
@@ -737,6 +831,7 @@
         );
         if (
           isWorldAuthority() &&
+          !remoteRespawning &&
           target.role !== "host" &&
           target.tankId === "support" &&
           target.turretDeploySequence > (remote.lastTurretDeploySequence ?? 0)
@@ -754,6 +849,7 @@
         );
         if (
           isWorldAuthority() &&
+          !remoteRespawning &&
           target.role !== "host" &&
           target.tankId === "support" &&
           target.armorDropSequence > (remote.lastArmorDropSequence ?? 0)
@@ -770,6 +866,7 @@
         );
         if (
           isWorldAuthority() &&
+          !remoteRespawning &&
           target.role !== "host" &&
           target.tankId === "bastion" &&
           target.orbitalSequence > (remote.lastOrbitalSequence ?? 0)
@@ -787,6 +884,7 @@
         );
         if (
           isWorldAuthority() &&
+          !remoteRespawning &&
           target.role !== "host" &&
           target.tankId === "scout" &&
           getRoleUpgrades(target.role).holographicDecoy > 0 &&
@@ -911,6 +1009,8 @@
         remote.turretOffset +
         normalizeAngle(remote.target.turretOffset - remote.turretOffset) * blend
       );
+      remote.cannonElevation +=
+        (remote.target.cannonElevation - remote.cannonElevation) * blend;
       remote.health += (remote.target.health - remote.health) * blend;
       remote.role = remote.target.role;
       remote.name = remote.target.name;
@@ -936,14 +1036,16 @@
       altitude: player.altitude,
       heading: player.heading,
       turretOffset: player.turretOffset,
+      cannonElevation: player.cannonElevation,
       health: player.health,
-      missionPhase,
+      missionPhase: respawnElapsed >= 0 ? MISSION_PHASE.DROP : missionPhase,
       sequence: localStateSequence,
       shotSequence: localShotSequence,
       shotX: lastLocalShot.x,
       shotY: lastLocalShot.y,
       shotZ: lastLocalShot.z,
       shotYaw: lastLocalShot.yaw,
+      shotElevation: lastLocalShot.elevation,
       shotTankId: lastLocalShot.tankId,
       shotEmpowered: Boolean(lastLocalShot.empowered),
       pulseSequence: localPulseSequence,
@@ -1122,6 +1224,16 @@
     );
     sharedGameOver = Boolean(world.gameOver);
     applySharedUpgradeState(world.upgrade);
+    const incomingRespawns = world.respawnSequences;
+    const localRole = getLocalRole();
+    const incomingRespawnSequence = Math.max(
+      0,
+      Math.floor(Number(incomingRespawns?.[localRole]) || 0)
+    );
+    if (incomingRespawnSequence > appliedRespawnSequence) {
+      appliedRespawnSequence = incomingRespawnSequence;
+      if (player.wave === previousWave) beginLocalRespawn();
+    }
     const sharedMission = world.mission;
     if (sharedMission) {
       const sharedType = normalizeMissionType(sharedMission.type);
@@ -1475,6 +1587,17 @@
         );
         screenShake = Math.max(screenShake, Math.max(2, 13 - blastDistance * 0.18));
         tone(44, 0.48, "sawtooth", 0.095, -12);
+      } else if (
+        shell.kind === "bombardier" &&
+        shell.life < 0.7 &&
+        Number.isFinite(shell.targetX) &&
+        Number.isFinite(shell.targetZ)
+      ) {
+        createBombardierImpactVisual(
+          shell.targetX,
+          shell.targetZ,
+          shell.blastRadius ?? BOMBARDIER.BLAST_RADIUS
+        );
       }
       remoteWorldShells.splice(i, 1);
     }
@@ -1489,6 +1612,7 @@
         y: Number(snapshot.y),
         z: Number(snapshot.z),
         vx: Number(snapshot.vx) || 0,
+        vy: Number(snapshot.vy) || 0,
         vz: Number(snapshot.vz) || 0,
         life: Number(snapshot.life) || 0,
         delay: Math.max(0, Number(snapshot.delay) || 0),
@@ -1575,6 +1699,7 @@
       Object.assign(shell, {
         targetX: target.targetX,
         targetZ: target.targetZ,
+        vy: target.vy,
         flightTime: target.flightTime,
         elapsed: target.elapsed,
         delay: target.delay,
@@ -1655,6 +1780,14 @@
           blastRadius: shell.blastRadius,
           blastDamage: shell.blastDamage
         });
+      } else if (shell.kind === "bombardier") {
+        Object.assign(state, {
+          vy: Number(shell.vy.toFixed(3)),
+          targetX: Number(shell.targetX.toFixed(3)),
+          targetZ: Number(shell.targetZ.toFixed(3)),
+          ownerRole: shell.ownerRole ?? "",
+          blastRadius: shell.blastRadius
+        });
       }
       shellStates[`s${shell.id}`] = state;
     }
@@ -1731,6 +1864,7 @@
         guest: Math.round(coopHealth.guest),
         guest2: Math.round(coopHealth.guest2)
       },
+      respawnSequences: { ...respawnSequences },
       armor: {
         host: Math.round(getRoleArmor("host")),
         guest: Math.round(getRoleArmor("guest")),
@@ -1880,9 +2014,29 @@
     return [cameraToScreen(ca), cameraToScreen(cb)];
   }
 
-  function line3d(a, b, color = COLORS.soft, lineWidth = 1, alpha = 1) {
+  function clipCameraPolygon(points) {
+    const clipped = [];
+    for (let index = 0; index < points.length; index += 1) {
+      const current = points[index];
+      const next = points[(index + 1) % points.length];
+      const currentVisible = current.z >= NEAR;
+      const nextVisible = next.z >= NEAR;
+      if (currentVisible) clipped.push(current);
+      if (currentVisible !== nextVisible) {
+        const t = (NEAR - current.z) / (next.z - current.z);
+        clipped.push({
+          x: current.x + (next.x - current.x) * t,
+          y: current.y + (next.y - current.y) * t,
+          z: NEAR
+        });
+      }
+    }
+    return clipped;
+  }
+
+  function trace3dSegment(a, b) {
     const segment = clipSegment(a, b);
-    if (!segment) return;
+    if (!segment) return false;
     const [pa, pb] = segment;
     const margin = Math.max(width, height) * 3;
     if (
@@ -1890,16 +2044,24 @@
       (pa.x > width + margin && pb.x > width + margin) ||
       (pa.y < -margin && pb.y < -margin) ||
       (pa.y > height + margin && pb.y > height + margin)
-    ) return;
+    ) return false;
 
+    ctx.moveTo(pa.x, pa.y);
+    ctx.lineTo(pb.x, pb.y);
+    return true;
+  }
+
+  function stroke3dPath(color, lineWidth, alpha) {
     ctx.globalAlpha = alpha * renderEnvironmentVisibility;
     ctx.strokeStyle = color;
     ctx.lineWidth = lineWidth;
-    ctx.beginPath();
-    ctx.moveTo(pa.x, pa.y);
-    ctx.lineTo(pb.x, pb.y);
     ctx.stroke();
     ctx.globalAlpha = 1;
+  }
+
+  function line3d(a, b, color = COLORS.soft, lineWidth = 1, alpha = 1) {
+    ctx.beginPath();
+    if (trace3dSegment(a, b)) stroke3dPath(color, lineWidth, alpha);
   }
 
   function orientedPoint(origin, localX, localY, localZ, angle) {
@@ -2195,7 +2357,8 @@
     ctx.restore();
   }
 
-  function drawRock(rock) {
+  function getRockGeometry(rock) {
+    if (rock.renderGeometry) return rock.renderGeometry;
     const base = [];
     const top = {
       x: rock.x + Math.sin(rock.seed) * rock.radius * 0.25,
@@ -2210,10 +2373,114 @@
         z: rock.z + Math.sin(angle) * rock.radius * (0.82 + ((i + 1) % 2) * 0.18)
       });
     }
-    for (let i = 0; i < base.length; i += 1) {
-      line3d(base[i], base[(i + 1) % base.length], COLORS.dim, 1, 0.62);
-      line3d(base[i], top, COLORS.dim, 1, 0.62);
+    const faces = base.map((first, index) => {
+      const second = base[(index + 1) % base.length];
+      const edgeX = second.x - first.x;
+      const edgeZ = second.z - first.z;
+      const riseX = top.x - first.x;
+      const riseY = top.y - first.y;
+      const riseZ = top.z - first.z;
+      return {
+        normalX: riseY * edgeZ,
+        normalY: riseZ * edgeX - riseX * edgeZ,
+        normalZ: -riseY * edgeX,
+        centerX: (first.x + second.x + top.x) / 3,
+        centerY: (first.y + second.y + top.y) / 3,
+        centerZ: (first.z + second.z + top.z) / 3
+      };
+    });
+    rock.renderGeometry = { base, top, faces };
+    return rock.renderGeometry;
+  }
+
+  function drawRock(rock) {
+    const { base, top, faces } = getRockGeometry(rock);
+
+    // Les faces noires masquent la grille et les objets derriere le rocher.
+    const topCamera = worldToCamera(top);
+    const baseCamera = base.map(worldToCamera);
+    if (topCamera.z < NEAR && baseCamera.every((point) => point.z < NEAR)) return;
+    const allInFront =
+      topCamera.z >= NEAR && baseCamera.every((point) => point.z >= NEAR);
+    const topScreen = allInFront ? cameraToScreen(topCamera) : null;
+    const baseScreen = allInFront ? baseCamera.map(cameraToScreen) : null;
+    if (allInFront) {
+      const margin = 16;
+      const points = [...baseScreen, topScreen];
+      if (
+        points.every((point) => point.x < -margin) ||
+        points.every((point) => point.x > width + margin) ||
+        points.every((point) => point.y < -margin) ||
+        points.every((point) => point.y > height + margin)
+      ) return;
     }
+
+    const visibleBase = Array(base.length).fill(false);
+    const visibleSpoke = Array(base.length).fill(false);
+    const cameraHeight = 1.48 + player.altitude;
+    for (let i = 0; i < base.length; i += 1) {
+      const next = (i + 1) % base.length;
+      const face = faces[i];
+      const facing =
+        face.normalX * (player.x - face.centerX) +
+        face.normalY * (cameraHeight - face.centerY) +
+        face.normalZ * (player.z - face.centerZ);
+      if (facing <= 0) continue;
+      visibleBase[i] = true;
+      visibleSpoke[i] = true;
+      visibleSpoke[next] = true;
+    }
+
+    ctx.save();
+    ctx.beginPath();
+    let hasVisibleFace = false;
+    for (let i = 0; i < base.length; i += 1) {
+      // Les faces arriere inversent le sens du tracage et trouent un remplissage commun.
+      if (!visibleBase[i]) continue;
+      if (allInFront) {
+        const first = baseScreen[i];
+        const second = baseScreen[(i + 1) % base.length];
+        ctx.moveTo(first.x, first.y);
+        ctx.lineTo(second.x, second.y);
+        ctx.lineTo(topScreen.x, topScreen.y);
+        ctx.closePath();
+        hasVisibleFace = true;
+        continue;
+      }
+      const face = clipCameraPolygon([
+        baseCamera[i],
+        baseCamera[(i + 1) % base.length],
+        topCamera
+      ]);
+      if (face.length < 3) continue;
+      const first = cameraToScreen(face[0]);
+      ctx.moveTo(first.x, first.y);
+      for (let vertex = 1; vertex < face.length; vertex += 1) {
+        const point = cameraToScreen(face[vertex]);
+        ctx.lineTo(point.x, point.y);
+      }
+      ctx.closePath();
+      hasVisibleFace = true;
+    }
+    if (hasVisibleFace) {
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = COLORS.black;
+      ctx.fill();
+    }
+
+    ctx.beginPath();
+    let hasVisibleEdge = false;
+    for (let i = 0; i < base.length; i += 1) {
+      if (visibleBase[i]) {
+        hasVisibleEdge = trace3dSegment(base[i], base[(i + 1) % base.length]) ||
+          hasVisibleEdge;
+      }
+      if (visibleSpoke[i]) {
+        hasVisibleEdge = trace3dSegment(base[i], top) || hasVisibleEdge;
+      }
+    }
+    if (hasVisibleEdge) stroke3dPath(COLORS.dim, 1, 0.62);
+    ctx.restore();
   }
 
   function drawRamp(ramp) {
@@ -2273,15 +2540,13 @@
     ctx.restore();
   }
 
-  function drawVolcano(volcano) {
-    if (distance(player, volcano) > VOLCANO_EFFECT.RENDER_DISTANCE) return;
+  function getVolcanoGeometry(volcano) {
+    if (volcano.renderGeometry) return volcano.renderGeometry;
     const segments = volcano.profile.length;
     const base = [];
     const shoulder = [];
     const crater = [];
     const innerCrater = [];
-    const craterPulse = 0.58 + Math.sin(performance.now() * 0.0035) * 0.18;
-
     for (let index = 0; index < segments; index += 1) {
       const angle = volcano.rotation + index / segments * TAU;
       const irregularity = volcano.profile[index];
@@ -2309,18 +2574,136 @@
       });
     }
 
-    for (let index = 0; index < segments; index += 1) {
-      const next = (index + 1) % segments;
-      line3d(base[index], base[next], COLORS.dim, 1, 0.56);
-      line3d(shoulder[index], shoulder[next], COLORS.soft, 1, 0.48);
-      line3d(crater[index], crater[next], COLORS.amber, 1.35, craterPulse);
-      line3d(innerCrater[index], innerCrater[next], COLORS.red, 1.1, craterPulse * 0.72);
-      line3d(base[index], shoulder[index], COLORS.dim, 0.9, 0.52);
-      line3d(shoulder[index], crater[index], COLORS.soft, 1, 0.58);
-      if (index % 2 === 0) {
-        line3d(base[index], crater[index], COLORS.dim, 0.75, 0.28);
+    const surfaceFace = (first, second, raised) => {
+      const edgeX = second.x - first.x;
+      const edgeZ = second.z - first.z;
+      const riseX = raised.x - first.x;
+      const riseY = raised.y - first.y;
+      const riseZ = raised.z - first.z;
+      return {
+        normalX: -edgeZ * riseY,
+        normalY: edgeZ * riseX - edgeX * riseZ,
+        normalZ: edgeX * riseY,
+        centerX: (first.x + second.x + raised.x) / 3,
+        centerY: (first.y + second.y + raised.y) / 3,
+        centerZ: (first.z + second.z + raised.z) / 3
+      };
+    };
+    const lowerFaces = base.map((point, index) =>
+      surfaceFace(point, base[(index + 1) % segments], shoulder[index])
+    );
+    const upperFaces = shoulder.map((point, index) =>
+      surfaceFace(point, shoulder[(index + 1) % segments], crater[index])
+    );
+    volcano.renderGeometry = { base, shoulder, crater, innerCrater, lowerFaces, upperFaces };
+    return volcano.renderGeometry;
+  }
+
+  function drawVolcano(volcano) {
+    if (distance(player, volcano) > VOLCANO_EFFECT.RENDER_DISTANCE) return;
+    const { base, shoulder, crater, innerCrater, lowerFaces, upperFaces } =
+      getVolcanoGeometry(volcano);
+    const segments = base.length;
+    const craterPulse = 0.58 + Math.sin(performance.now() * 0.0035) * 0.18;
+    const baseCamera = base.map(worldToCamera);
+    const shoulderCamera = shoulder.map(worldToCamera);
+    const craterCamera = crater.map(worldToCamera);
+    const cameraPoints = [...baseCamera, ...shoulderCamera, ...craterCamera];
+    if (cameraPoints.every((point) => point.z < NEAR)) return;
+
+    // Une seule silhouette pleine masque le terrain et les traits a l'arriere.
+    let screenPoints;
+    if (cameraPoints.every((point) => point.z >= NEAR)) {
+      screenPoints = cameraPoints.map(cameraToScreen);
+    } else {
+      screenPoints = [];
+      for (let index = 0; index < segments; index += 1) {
+        const next = (index + 1) % segments;
+        const lower = clipCameraPolygon([
+          baseCamera[index], baseCamera[next],
+          shoulderCamera[next], shoulderCamera[index]
+        ]);
+        const upper = clipCameraPolygon([
+          shoulderCamera[index], shoulderCamera[next],
+          craterCamera[next], craterCamera[index]
+        ]);
+        for (const point of lower) screenPoints.push(cameraToScreen(point));
+        for (const point of upper) screenPoints.push(cameraToScreen(point));
       }
     }
+    if (screenPoints.length < 3) return;
+    const margin = 16;
+    if (
+      screenPoints.every((point) => point.x < -margin) ||
+      screenPoints.every((point) => point.x > width + margin) ||
+      screenPoints.every((point) => point.y < -margin) ||
+      screenPoints.every((point) => point.y > height + margin)
+    ) return;
+    screenPoints.sort((a, b) => a.x - b.x || a.y - b.y);
+    const cross = (origin, first, second) =>
+      (first.x - origin.x) * (second.y - origin.y) -
+      (first.y - origin.y) * (second.x - origin.x);
+    const lowerHull = [];
+    const upperHull = [];
+    for (const point of screenPoints) {
+      while (lowerHull.length > 1 &&
+        cross(lowerHull[lowerHull.length - 2], lowerHull[lowerHull.length - 1], point) <= 0) {
+        lowerHull.pop();
+      }
+      lowerHull.push(point);
+    }
+    for (let index = screenPoints.length - 1; index >= 0; index -= 1) {
+      const point = screenPoints[index];
+      while (upperHull.length > 1 &&
+        cross(upperHull[upperHull.length - 2], upperHull[upperHull.length - 1], point) <= 0) {
+        upperHull.pop();
+      }
+      upperHull.push(point);
+    }
+    const hull = lowerHull.slice(0, -1).concat(upperHull.slice(0, -1));
+    if (hull.length < 3) return;
+    ctx.save();
+    ctx.fillStyle = COLORS.black;
+    ctx.beginPath();
+    ctx.moveTo(hull[0].x, hull[0].y);
+    for (let index = 1; index < hull.length; index += 1) {
+      ctx.lineTo(hull[index].x, hull[index].y);
+    }
+    ctx.closePath();
+    ctx.fill();
+
+    const cameraHeight = 1.48 + player.altitude;
+    const facing = (face) =>
+      face.normalX * (player.x - face.centerX) +
+      face.normalY * (cameraHeight - face.centerY) +
+      face.normalZ * (player.z - face.centerZ) > 0;
+    const frontLower = lowerFaces.map(facing);
+    const frontUpper = upperFaces.map(facing);
+    const drawEdges = (visible, start, end, color, lineWidth, alpha) => {
+      ctx.beginPath();
+      let drawn = false;
+      for (let index = 0; index < segments; index += 1) {
+        if (!visible(index)) continue;
+        drawn = trace3dSegment(start[index], end(index)) || drawn;
+      }
+      if (drawn) stroke3dPath(color, lineWidth, alpha);
+    };
+
+    drawEdges((index) => frontLower[index], base,
+      (index) => base[(index + 1) % segments], COLORS.dim, 1, 0.56);
+    drawEdges((index) => frontLower[index] || frontUpper[index], shoulder,
+      (index) => shoulder[(index + 1) % segments], COLORS.soft, 1, 0.48);
+    drawEdges(() => true, crater,
+      (index) => crater[(index + 1) % segments], COLORS.amber, 1.35, craterPulse);
+    drawEdges(() => true, innerCrater,
+      (index) => innerCrater[(index + 1) % segments], COLORS.red, 1.1, craterPulse * 0.72);
+    drawEdges((index) => frontLower[index] || frontLower[(index + segments - 1) % segments],
+      base, (index) => shoulder[index], COLORS.dim, 0.9, 0.52);
+    drawEdges((index) => frontUpper[index] || frontUpper[(index + segments - 1) % segments],
+      shoulder, (index) => crater[index], COLORS.soft, 1, 0.58);
+    drawEdges((index) => index % 2 === 0 && frontLower[index] && frontUpper[index],
+      base, (index) => crater[index], COLORS.dim, 0.75, 0.28);
+    ctx.restore();
   }
 
   function drawTankEdge(a, b, color, fade, lineWidth = 1.25) {
@@ -2335,14 +2718,20 @@
   }
 
   function drawTankEdges(points, edges, color, fade, lineWidth = 1.25) {
+    ctx.beginPath();
+    let visible = false;
     for (const [a, b] of edges) {
-      drawTankEdge(points[a], points[b], color, fade, lineWidth);
+      visible = trace3dSegment(points[a], points[b]) || visible;
     }
+    if (!visible) return;
+    stroke3dPath(color, lineWidth + 2.2, fade * 0.12);
+    stroke3dPath(color, lineWidth, fade);
   }
 
   function drawTankFaces(groups, color, fade, maskAlpha = 0.99) {
     const orderedFaces = [];
-    for (const group of groups) {
+    for (let groupIndex = 0; groupIndex < groups.length; groupIndex += 1) {
+      const group = groups[groupIndex];
       for (const face of group.faces) {
         const worldPoints = face.map((index) => group.points[index]);
         const cameraPoints = worldPoints.map(worldToCamera);
@@ -2355,14 +2744,27 @@
           worldPoints,
           screenPoints,
           depth,
+          vertexIndices: face,
+          groupIndex,
           lineWidth: group.lineWidth ?? 1.25
         });
       }
     }
 
     orderedFaces.sort((a, b) => b.depth - a.depth);
+    const lastFaceForEdge = new Map();
+    for (let faceIndex = 0; faceIndex < orderedFaces.length; faceIndex += 1) {
+      const face = orderedFaces[faceIndex];
+      for (let index = 0; index < face.vertexIndices.length; index += 1) {
+        const first = face.vertexIndices[index];
+        const second = face.vertexIndices[(index + 1) % face.vertexIndices.length];
+        const key = `${face.groupIndex}:${Math.min(first, second)}:${Math.max(first, second)}`;
+        lastFaceForEdge.set(key, faceIndex);
+      }
+    }
     ctx.save();
-    for (const face of orderedFaces) {
+    for (let faceIndex = 0; faceIndex < orderedFaces.length; faceIndex += 1) {
+      const face = orderedFaces[faceIndex];
       ctx.globalAlpha = maskAlpha * renderEnvironmentVisibility;
       ctx.fillStyle = COLORS.black;
       ctx.beginPath();
@@ -2374,14 +2776,21 @@
       ctx.fill();
       ctx.globalAlpha = 1;
 
+      ctx.beginPath();
+      let visible = false;
       for (let i = 0; i < face.worldPoints.length; i += 1) {
-        drawTankEdge(
+        const first = face.vertexIndices[i];
+        const second = face.vertexIndices[(i + 1) % face.vertexIndices.length];
+        const key = `${face.groupIndex}:${Math.min(first, second)}:${Math.max(first, second)}`;
+        if (lastFaceForEdge.get(key) !== faceIndex) continue;
+        visible = trace3dSegment(
           face.worldPoints[i],
-          face.worldPoints[(i + 1) % face.worldPoints.length],
-          color,
-          fade,
-          face.lineWidth
-        );
+          face.worldPoints[(i + 1) % face.worldPoints.length]
+        ) || visible;
+      }
+      if (visible) {
+        stroke3dPath(color, face.lineWidth + 2.2, fade * 0.12);
+        stroke3dPath(color, face.lineWidth, fade);
       }
     }
     ctx.restore();
@@ -2476,8 +2885,15 @@
 
     if (!type.support && !type.wasp) {
       const barrelY = (light ? 0.88 : 0.96) * scale;
-      const barrelWidth = (light ? 0.045 : 0.065) * scale;
-      const barrelLength = (type.twinCannon ? 3.05 : light ? 2.3 : 2.65) * scale;
+      const barrelWidth = (type.bombardier ? 0.12 : light ? 0.045 : 0.065) * scale;
+      const barrelLength = (type.twinCannon ? 3.05 : type.bombardier ? 2.4 : light ? 2.3 : 2.65) * scale;
+      const elevation = type.bombardier
+        ? enemy.cannonElevation ?? BOMBARDIER.DEFAULT_ELEVATION
+        : 0;
+      const barrelEndY = barrelY +
+        (barrelLength - 0.5 * scale) * Math.sin(elevation);
+      const barrelEndZ = 0.5 * scale +
+        (barrelLength - 0.5 * scale) * Math.cos(elevation);
       const barrelOffsets = type.twinCannon
         ? [-0.38 * scale, 0.38 * scale]
         : [0];
@@ -2500,15 +2916,15 @@
         const barrelEndLeft = orientedPoint(
           enemy,
           barrelOffset - barrelWidth,
-          barrelY,
-          barrelLength,
+          barrelEndY,
+          barrelEndZ,
           enemy.turretHeading
         );
         const barrelEndRight = orientedPoint(
           enemy,
           barrelOffset + barrelWidth,
-          barrelY,
-          barrelLength,
+          barrelEndY,
+          barrelEndZ,
           enemy.turretHeading
         );
         drawTankEdge(
@@ -3540,7 +3956,11 @@
   }
 
   function drawRemotePlayer(remote) {
-    if (remote.missionPhase !== MISSION_PHASE.COMBAT) return;
+    if (
+      remote.missionPhase === MISSION_PHASE.IDLE ||
+      (remote.missionPhase === MISSION_PHASE.DROP &&
+        missionPhase === MISSION_PHASE.DROP)
+    ) return;
 
     const environmentVisibility = getEnvironmentVisibility(
       environmentState,
@@ -3551,6 +3971,8 @@
     const scale =
       remote.tankId === "bastion"
         ? 1.08
+        : remote.tankId === "bombardier"
+          ? 1.04
         : remote.tankId === "support"
           ? 0.96
           : remote.tankId === "spectre"
@@ -3573,6 +3995,7 @@
       {
         id: ["scout", "spectre"].includes(remote.tankId) ? "light" : "assault",
         scale,
+        bombardier: remote.tankId === "bombardier",
         twinCannon:
           remote.tankId === "bastion" &&
           getRoleUpgrades(remote.role).twinCannon > 0
@@ -3789,19 +4212,22 @@
 
   function drawShell(shell) {
     const artillery = shell.kind === "artillery";
+    const bombardier = shell.kind === "bombardier";
     if (artillery) drawArtilleryTarget(shell);
     if (!artillery && (shell.delay ?? 0) > 0) return;
 
     const p = project({ x: shell.x, y: shell.y, z: shell.z });
     if (!p) return;
     const radius = Math.max(
-      artillery ? 2.4 : 1.4,
-      Math.min(artillery ? 10 : 7, (artillery ? 26 : 18) / p.depth)
+      artillery || bombardier ? 2.4 : 1.4,
+      Math.min(artillery || bombardier ? 10 : 7, (artillery || bombardier ? 26 : 18) / p.depth)
     );
     const color = shell.spectralAmbush
       ? COLORS.violet
       : shell.orbital
       ? COLORS.cyan
+      : bombardier
+      ? COLORS.amber
       : shell.owner === "support"
       ? COLORS.cyan
       : shell.owner !== "enemy" || artillery
@@ -3831,9 +4257,18 @@
       return;
     }
 
+    if (bombardier && shell.trail?.length > 1) {
+      ctx.beginPath();
+      let visible = false;
+      for (let i = 1; i < shell.trail.length; i += 1) {
+        visible = trace3dSegment(shell.trail[i - 1], shell.trail[i]) || visible;
+      }
+      if (visible) stroke3dPath(COLORS.amber, 1.2, 0.55);
+    }
+
     const tail = {
       x: shell.x - shell.vx * 0.045,
-      y: shell.y,
+      y: shell.y - (shell.vy ?? 0) * 0.045,
       z: shell.z - shell.vz * 0.045
     };
     line3d(tail, shell, color, 1.5, 0.7);
@@ -3847,23 +4282,27 @@
     const radius = 0.58;
     const segments = 8;
     const top = { x: mine.x, y: 0.34, z: mine.z };
-
+    const rim = [];
     for (let index = 0; index < segments; index += 1) {
-      const angleA = index / segments * TAU;
-      const angleB = (index + 1) / segments * TAU;
-      const edgeA = {
-        x: mine.x + Math.sin(angleA) * radius,
+      const angle = index / segments * TAU;
+      rim.push({
+        x: mine.x + Math.sin(angle) * radius,
         y: 0.07,
-        z: mine.z + Math.cos(angleA) * radius
-      };
-      const edgeB = {
-        x: mine.x + Math.sin(angleB) * radius,
-        y: 0.07,
-        z: mine.z + Math.cos(angleB) * radius
-      };
-      line3d(edgeA, edgeB, color, armed ? 1.35 : 1, 0.76);
-      if (index % 2 === 0) line3d(edgeA, top, color, 1, 0.62);
+        z: mine.z + Math.cos(angle) * radius
+      });
     }
+    ctx.beginPath();
+    let rimVisible = false;
+    for (let index = 0; index < segments; index += 1) {
+      rimVisible = trace3dSegment(rim[index], rim[(index + 1) % segments]) || rimVisible;
+    }
+    if (rimVisible) stroke3dPath(color, armed ? 1.35 : 1, 0.76);
+    ctx.beginPath();
+    let spokesVisible = false;
+    for (let index = 0; index < segments; index += 2) {
+      spokesVisible = trace3dSegment(rim[index], top) || spokesVisible;
+    }
+    if (spokesVisible) stroke3dPath(color, 1, 0.62);
 
     const center = project({ x: mine.x, y: 0.42, z: mine.z });
     if (!center) return;
@@ -4143,6 +4582,62 @@
     }
   }
 
+  function drawBombardierAim() {
+    if (
+      player.tankId !== "bombardier" ||
+      missionPhase !== MISSION_PHASE.COMBAT ||
+      respawnElapsed >= 0
+    ) return;
+    const tank = getPlayerTank();
+    const trajectory = getBombardierTrajectory(
+      player.x,
+      player.altitude + 1.05,
+      player.z,
+      player.heading + player.turretOffset,
+      player.cannonElevation,
+      tank.shellSpeed
+    );
+    const sample = (time) => ({
+      x: trajectory.startX + trajectory.vx * time,
+      y: Math.max(0.04, trajectory.startY + trajectory.launchVy * time -
+        0.5 * BOMBARDIER.GRAVITY * time * time),
+      z: trajectory.startZ + trajectory.vz * time
+    });
+    ctx.beginPath();
+    let visible = false;
+    for (let index = 1; index <= 7; index += 1) {
+      const point = project(sample(trajectory.flightTime * index / 8));
+      if (!point || point.x < 0 || point.x > width || point.y < 0 || point.y > height) {
+        continue;
+      }
+      ctx.moveTo(point.x - 2, point.y);
+      ctx.lineTo(point.x + 2, point.y);
+      visible = true;
+    }
+    if (visible) stroke3dPath(COLORS.cyan, 1.15, 0.48);
+
+    const radius = tank.blastRadius;
+    ctx.beginPath();
+    visible = false;
+    for (let index = 0; index < 12; index += 2) {
+      const first = index / 12 * TAU;
+      const second = (index + 1) / 12 * TAU;
+      visible = trace3dSegment(
+        {
+          x: trajectory.targetX + Math.sin(first) * radius,
+          y: 0.06,
+          z: trajectory.targetZ + Math.cos(first) * radius
+        },
+        {
+          x: trajectory.targetX + Math.sin(second) * radius,
+          y: 0.06,
+          z: trajectory.targetZ + Math.cos(second) * radius
+        }
+      ) || visible;
+    }
+    if (visible) stroke3dPath(COLORS.amber, 1.2, 0.72);
+  }
+
   function drawReticle() {
     const x = width / 2;
     const y = horizon;
@@ -4151,7 +4646,7 @@
     const chassisX = x + Math.cos(chassisAngle) * chassisRadius;
     const chassisY = y + Math.sin(chassisAngle) * chassisRadius;
     const aligned = Math.abs(player.turretOffset) < 0.025;
-    const locked = enemies.some((enemy) => {
+    const locked = player.tankId !== "bombardier" && enemies.some((enemy) => {
       if (getEnemyVisibility(enemy) < 0.12) return false;
       const p = project({ x: enemy.x, y: 0.7, z: enemy.z });
       return p && p.depth < 55 && Math.hypot(p.x - x, p.y - y) < Math.max(18, 120 / p.depth);
@@ -4214,6 +4709,27 @@
       ctx.textAlign = "center";
       ctx.fillStyle = color;
       ctx.fillText("CIBLE", x, y + 45);
+    }
+    if (player.tankId === "bombardier") {
+      const shot = getBombardierTrajectory(
+        player.x,
+        player.altitude + 1.05,
+        player.z,
+        player.heading + player.turretOffset,
+        player.cannonElevation,
+        getPlayerTank().shellSpeed
+      );
+      const range = Math.round(Math.hypot(
+        shot.targetX - player.x, shot.targetZ - player.z
+      ) * 10);
+      ctx.font = "9px Courier New";
+      ctx.textAlign = "center";
+      ctx.fillStyle = COLORS.amber;
+      ctx.fillText(
+        `ANGLE ${Math.round(player.cannonElevation * 180 / Math.PI)}° // IMPACT ${range} m`,
+        x,
+        y + 45
+      );
     }
     if (!aligned) {
       ctx.font = "8px Courier New";
@@ -4659,9 +5175,12 @@
 
     // Canon vu dans l'axe : chaque tube converge vers une petite bouche carrée.
     const barrelBaseY = baseY - (light ? 13 : 16);
-    const barrelEndY = shoulderY - (light ? 72 : 94);
-    const barrelBaseHalf = light ? 8 : 11;
-    const barrelEndHalf = light ? 2.5 : 3.5;
+    const barrelEndY = shoulderY - (light ? 72 : 94) -
+      (tank.id === "bombardier"
+        ? (player.cannonElevation - BOMBARDIER.DEFAULT_ELEVATION) * 72
+        : 0);
+    const barrelBaseHalf = tank.id === "bombardier" ? 14 : light ? 8 : 11;
+    const barrelEndHalf = tank.id === "bombardier" ? 5 : light ? 2.5 : 3.5;
     const twinCannon =
       tank.id === "bastion" && getRoleUpgrades(getLocalRole()).twinCannon > 0;
     const barrelMounts = twinCannon
@@ -5255,7 +5774,31 @@
       color: pulseProgress >= 1 ? COLORS.cyan : COLORS.dim
     }];
 
-    if (tank.id === "support") {
+    if (tank.id === "bombardier") {
+      const shot = getBombardierTrajectory(
+        player.x,
+        player.altitude + 1.05,
+        player.z,
+        player.heading + player.turretOffset,
+        player.cannonElevation,
+        tank.shellSpeed
+      );
+      rows.push({
+        key: "MW",
+        label: "ÉLÉVATION",
+        compactLabel: "ANGLE",
+        value: `${Math.round(player.cannonElevation * 180 / Math.PI)}°`,
+        color: COLORS.amber
+      }, {
+        key: "TIR",
+        label: "PORTÉE PRÉVUE",
+        compactLabel: "PORTÉE",
+        value: `${Math.round(Math.hypot(
+          shot.targetX - player.x, shot.targetZ - player.z
+        ) * 10)} m`,
+        color: COLORS.amber
+      });
+    } else if (tank.id === "support") {
       const turretStatus = player.supportDeployTimer > 0
         ? `${player.supportDeployTimer.toFixed(1)}s`
         : player.supportTurretCooldown <= 0
@@ -5992,8 +6535,9 @@
 
   function drawDropHud() {
     const tank = getPlayerTank();
-    const progress = Math.min(1, dropElapsed / DROP_SEQUENCE.DURATION);
-    const remaining = Math.max(0, DROP_SEQUENCE.DURATION - dropElapsed);
+    const elapsed = respawnElapsed >= 0 ? respawnElapsed : dropElapsed;
+    const progress = Math.min(1, elapsed / DROP_SEQUENCE.DURATION);
+    const remaining = Math.max(0, DROP_SEQUENCE.DURATION - elapsed);
     const descentSpeed =
       (2 * DROP_SEQUENCE.START_HEIGHT * progress / DROP_SEQUENCE.DURATION) * 10;
     const centerX = width / 2;
@@ -6002,7 +6546,14 @@
     ctx.textAlign = "center";
     ctx.fillStyle = COLORS.amber;
     ctx.font = "10px Courier New";
-    ctx.fillText(`LARGAGE TACTIQUE // ${tank.label}`, centerX, 70);
+    ctx.fillText(
+      respawnElapsed >= 0
+        ? `REDÉPLOIEMENT // ${tank.label} // OPTIMISATIONS PERDUES`
+        : `LARGAGE TACTIQUE // ${tank.label}`,
+      centerX,
+      70,
+      width - 24
+    );
     ctx.fillStyle = COLORS.green;
     ctx.font = "12px Courier New";
     ctx.fillText(
@@ -6098,6 +6649,7 @@
     }
     drawGround();
     drawTrainRail();
+    drawBombardierAim();
 
     const renderables = [
       ...volcanoes.map((volcano) => ({
@@ -6174,7 +6726,7 @@
     drawRainOverlay();
     drawCockpit();
     drawWindshieldDamage(getCockpitLayout());
-    if (missionPhase === MISSION_PHASE.DROP) {
+    if (missionPhase === MISSION_PHASE.DROP || respawnElapsed >= 0) {
       drawDropHud();
     } else {
       drawReticle();
@@ -6649,6 +7201,7 @@
     missionFailureReason = "";
     for (const role of COOP_ROLES) {
       coopInvulnerability[role] = Math.max(coopInvulnerability[role], 1.2);
+      coopRespawnTimers[role] = 0;
     }
     const squadBonus = isCoopGame()
       ? Math.max(0, networkSnapshot.playerCount - 2) * 2
@@ -6822,6 +7375,7 @@
       z: initialFormation.z,
       heading: initialFormation.heading,
       turretOffset: 0,
+      cannonElevation: BOMBARDIER.DEFAULT_ELEVATION,
       speed: 0,
       health: 100,
       reload: 0,
@@ -6857,6 +7411,8 @@
     waveText = "";
     missionPhase = MISSION_PHASE.DROP;
     dropElapsed = 0;
+    respawnElapsed = -1;
+    appliedRespawnSequence = 0;
     landingPulse = 0;
     localStateSequence = 0;
     nextPlayerStateBuildAt = 0;
@@ -6880,6 +7436,8 @@
       coopHealth[role] = 100;
       coopArmor[role] = 0;
       coopInvulnerability[role] = 0;
+      coopRespawnTimers[role] = 0;
+      respawnSequences[role] = 0;
       coopKills[role] = 0;
       upgradeState.choices[role] = "";
       upgradeState.stats[role] = createUpgradeLevels();
@@ -6889,6 +7447,7 @@
       y: 0.86,
       z: initialFormation.z,
       yaw: initialFormation.heading,
+      elevation: BOMBARDIER.DEFAULT_ELEVATION,
       tankId: selectedTankId,
       empowered: false
     };
@@ -7013,7 +7572,7 @@
         running &&
         !paused &&
         !gameOver &&
-        missionPhase === MISSION_PHASE.COMBAT,
+        missionPhase === MISSION_PHASE.COMBAT && respawnElapsed < 0,
       tankId: tank.id,
       speed: player.speed,
       forwardSpeed: tank.forwardSpeed,
@@ -7188,12 +7747,62 @@
     }
   }
 
+  function getBombardierTrajectory(x, y, z, yaw, elevation, speed) {
+    const angle = Math.max(BOMBARDIER.MIN_ELEVATION, Math.min(
+      BOMBARDIER.MAX_ELEVATION, elevation
+    ));
+    const startX = x + Math.sin(yaw) * 1.8;
+    const startZ = z + Math.cos(yaw) * 1.8;
+    const horizontalSpeed = speed * Math.cos(angle);
+    const verticalSpeed = speed * Math.sin(angle);
+    const flightTime = (
+      verticalSpeed + Math.sqrt(verticalSpeed * verticalSpeed + 2 * BOMBARDIER.GRAVITY * y)
+    ) / BOMBARDIER.GRAVITY;
+    const vx = Math.sin(yaw) * horizontalSpeed;
+    const vz = Math.cos(yaw) * horizontalSpeed;
+    return {
+      startX,
+      startY: y,
+      startZ,
+      vx,
+      vy: verticalSpeed,
+      launchVy: verticalSpeed,
+      vz,
+      flightTime,
+      targetX: startX + vx * flightTime,
+      targetZ: startZ + vz * flightTime
+    };
+  }
+
+  function createBombardierShell(x, y, z, yaw, elevation, tank, owner, ownerRole) {
+    const trajectory = getBombardierTrajectory(
+      x, y, z, yaw, elevation, tank.shellSpeed
+    );
+    return {
+      id: ++shellSerial,
+      kind: "bombardier",
+      x: trajectory.startX,
+      y: trajectory.startY,
+      z: trajectory.startZ,
+      ...trajectory,
+      elapsed: 0,
+      life: trajectory.flightTime,
+      trail: [],
+      trailTimer: 0,
+      blastRadius: tank.blastRadius,
+      blastDamage: BOMBARDIER.BLAST_DAMAGE,
+      owner,
+      ownerRole
+    };
+  }
+
   function firePlayer() {
     if (
       !running ||
       paused ||
       gameOver ||
       missionPhase !== MISSION_PHASE.COMBAT ||
+      respawnElapsed >= 0 ||
       isUpgradeActive() ||
       player.reload > 0
     ) return;
@@ -7210,37 +7819,52 @@
       player.tankId,
       getRoleUpgrades(role)
     );
-    for (const cannonOffset of cannonOffsets) {
-      shells.push({
-        id: ++shellSerial,
-        kind: "direct",
-        x:
-          player.x +
-          Math.sin(yaw) * 1.8 +
-          Math.cos(yaw) * cannonOffset,
-        y: player.altitude + 0.86,
-        z:
-          player.z +
-          Math.cos(yaw) * 1.8 -
-          Math.sin(yaw) * cannonOffset,
-        vx: Math.sin(yaw) * tank.shellSpeed,
-        vz: Math.cos(yaw) * tank.shellSpeed,
-        life: tank.shellLifetime,
-        owner: "player",
-        ownerRole: isCoopGame() ? role : "player",
-        damage: spectralAmbush ? PHASE_CLOAK.AMBUSH_DAMAGE : 1,
-        pierceRemaining: spectralAmbush ? PHASE_CLOAK.AMBUSH_PIERCE : 0,
-        spectralAmbush,
-        hitEnemyIds: []
-      });
-      createMuzzleSmoke(yaw, cannonOffset);
+    if (player.tankId === "bombardier") {
+      shells.push(createBombardierShell(
+        player.x,
+        player.altitude + 1.05,
+        player.z,
+        yaw,
+        player.cannonElevation,
+        tank,
+        "player",
+        isCoopGame() ? role : "player"
+      ));
+      createMuzzleSmoke(yaw, 0);
+    } else {
+      for (const cannonOffset of cannonOffsets) {
+        shells.push({
+          id: ++shellSerial,
+          kind: "direct",
+          x:
+            player.x +
+            Math.sin(yaw) * 1.8 +
+            Math.cos(yaw) * cannonOffset,
+          y: player.altitude + 0.86,
+          z:
+            player.z +
+            Math.cos(yaw) * 1.8 -
+            Math.sin(yaw) * cannonOffset,
+          vx: Math.sin(yaw) * tank.shellSpeed,
+          vz: Math.cos(yaw) * tank.shellSpeed,
+          life: tank.shellLifetime,
+          owner: "player",
+          ownerRole: isCoopGame() ? role : "player",
+          damage: spectralAmbush ? PHASE_CLOAK.AMBUSH_DAMAGE : 1,
+          pierceRemaining: spectralAmbush ? PHASE_CLOAK.AMBUSH_PIERCE : 0,
+          spectralAmbush,
+          hitEnemyIds: []
+        });
+        createMuzzleSmoke(yaw, cannonOffset);
+      }
     }
     localShotSequence += 1;
     lastLocalShot = {
       x: player.x,
-      y: player.altitude + 0.86,
+      y: player.altitude + (player.tankId === "bombardier" ? 1.05 : 0.86),
       z: player.z,
       yaw,
+      elevation: player.cannonElevation,
       tankId: player.tankId,
       empowered: spectralAmbush
     };
@@ -7250,8 +7874,14 @@
     }
     playCannonFireSound();
     player.reload = tank.reloadTime;
-    screenShake = 5;
-    tone(74, 0.12, "sawtooth", 0.07, -28);
+    screenShake = player.tankId === "bombardier" ? 8 : 5;
+    tone(
+      player.tankId === "bombardier" ? 52 : 74,
+      player.tankId === "bombardier" ? 0.22 : 0.12,
+      "sawtooth",
+      0.07,
+      -28
+    );
     tone(190, 0.05, "square", 0.035, -80);
   }
 
@@ -7323,6 +7953,7 @@
       paused ||
       gameOver ||
       missionPhase !== MISSION_PHASE.COMBAT ||
+      respawnElapsed >= 0 ||
       isUpgradeActive() ||
       player.pulseCooldown > 0
     ) return;
@@ -7357,6 +7988,20 @@
       shot.shotTankId === "spectre" &&
       Boolean(shot.shotEmpowered) &&
       upgrades.spectralAmbush > 0;
+    if (shot.shotTankId === "bombardier") {
+      shells.push(createBombardierShell(
+        shot.shotX,
+        shot.shotY,
+        shot.shotZ,
+        shot.shotYaw,
+        shot.shotElevation,
+        tank,
+        "ally",
+        shot.role
+      ));
+      tone(74, 0.12, "sawtooth", 0.025, -28);
+      return;
+    }
     const cannonOffsets = getPlayerCannonOffsets(shot.shotTankId, upgrades);
     for (const cannonOffset of cannonOffsets) {
       shells.push({
@@ -7508,6 +8153,7 @@
       paused ||
       gameOver ||
       missionPhase !== MISSION_PHASE.COMBAT ||
+      respawnElapsed >= 0 ||
       isUpgradeActive() ||
       player.tankId !== "support" ||
       player.supportDeployTimer > 0 ||
@@ -7531,6 +8177,7 @@
       paused ||
       gameOver ||
       missionPhase !== MISSION_PHASE.COMBAT ||
+      respawnElapsed >= 0 ||
       isUpgradeActive() ||
       player.tankId !== "support" ||
       player.supportDeployTimer > 0 ||
@@ -7653,6 +8300,7 @@
       paused ||
       gameOver ||
       missionPhase !== MISSION_PHASE.COMBAT ||
+      respawnElapsed >= 0 ||
       isUpgradeActive() ||
       player.tankId !== "scout" ||
       getRoleUpgrades(role).holographicDecoy <= 0 ||
@@ -7733,6 +8381,7 @@
       paused ||
       gameOver ||
       missionPhase !== MISSION_PHASE.COMBAT ||
+      respawnElapsed >= 0 ||
       isUpgradeActive() ||
       player.tankId !== "bastion" ||
       player.orbitalCooldown > 0
@@ -7779,6 +8428,7 @@
       paused ||
       gameOver ||
       missionPhase !== MISSION_PHASE.COMBAT ||
+      respawnElapsed >= 0 ||
       isUpgradeActive() ||
       player.tankId !== "scout" ||
       player.scoutTurboTimer > 0 ||
@@ -7818,6 +8468,7 @@
       paused ||
       gameOver ||
       missionPhase !== MISSION_PHASE.COMBAT ||
+      respawnElapsed >= 0 ||
       isUpgradeActive() ||
       player.tankId !== "spectre" ||
       player.phaseCloakTimer > 0 ||
@@ -8561,7 +9212,7 @@
     for (const shell of shells) {
       if (
         (shell.owner !== "player" && shell.owner !== "ally") ||
-        shell.kind === "artillery" ||
+        shell.kind !== "direct" ||
         (shell.delay ?? 0) > 0
       ) continue;
       const velocitySquared = shell.vx ** 2 + shell.vz ** 2;
@@ -9006,7 +9657,8 @@
 
   function getCombatTargets() {
     const localRole = isCoopGame() ? networkSnapshot.role : "player";
-    const targets = [{
+    const targets = [];
+    if (respawnElapsed < 0) targets.push({
       role: localRole,
       x: player.x,
       z: player.z,
@@ -9016,12 +9668,13 @@
       health: player.health,
       tankId: player.tankId,
       cloaked: player.tankId === "spectre" && player.phaseCloakTimer > 0
-    }];
+    });
     if (isCoopGame() && networkSnapshot.role === "host") {
       for (const remote of remotePlayers.values()) {
         const remoteHealth = coopHealth[remote.role] ?? remote.health;
         if (
           remote.missionPhase !== MISSION_PHASE.COMBAT ||
+          coopRespawnTimers[remote.role] > 0 ||
           remoteHealth <= 0
         ) continue;
         targets.push({
@@ -10212,7 +10865,7 @@
   }
 
   function damagePlayer(amount, impactX, impactZ, shake = 12) {
-    if (player.invulnerable > 0 || gameOver) return;
+    if (player.invulnerable > 0 || respawnElapsed >= 0 || gameOver) return;
     const role = getLocalRole();
     const mitigatedDamage = getMitigatedPlayerDamage(role, amount);
     const absorbedDamage = Math.min(getRoleArmor(role), mitigatedDamage);
@@ -10237,12 +10890,10 @@
       screenShake = Math.max(screenShake, shake * 0.48);
     }
     if (player.health <= 0) {
-      defeatedPlayerRole = isCoopGame() ? getLocalRole() : "";
+      beginLocalRespawn();
       if (isCoopGame() && networkSnapshot.role === "host") {
-        sharedGameOver = true;
         publishSharedWorld(true);
       }
-      endGame();
     }
   }
 
@@ -10325,10 +10976,7 @@
       tone(82, 0.18, "sawtooth", 0.025, -35);
     }
     if (coopHealth[role] <= 0) {
-      defeatedPlayerRole = role;
-      sharedGameOver = true;
-      publishSharedWorld(true);
-      endGame();
+      beginRemoteRespawn(role, impactX, impactZ);
     }
   }
 
@@ -10613,12 +11261,102 @@
     return Math.abs((shell.y ?? 0.86) - centerY) < verticalRadius;
   }
 
+  function createBombardierImpactVisual(x, z, radius) {
+    burst(x, z, COLORS.amber, 32);
+    burst(x, z, COLORS.red, 14);
+    createBlastSmoke(x, z);
+    particles.push({
+      kind: "shockwave",
+      x,
+      y: 0.08,
+      z,
+      vx: 0,
+      vy: 0,
+      vz: 0,
+      gravity: 0,
+      drag: 0,
+      growth: 0,
+      size: 0,
+      color: COLORS.amber,
+      maxRadius: radius,
+      life: 0.48,
+      maxLife: 0.48
+    });
+    const localDistance = Math.hypot(x - player.x, z - player.z);
+    screenShake = Math.max(screenShake, Math.max(2, 12 - localDistance * 0.2));
+    tone(52, 0.34, "sawtooth", 0.07, -24);
+  }
+
+  function explodeBombardierShell(shell) {
+    createBombardierImpactVisual(shell.targetX, shell.targetZ, shell.blastRadius);
+    if (!isWorldAuthority()) return;
+
+    for (const mine of mines) {
+      if (mine.detonated || Math.hypot(
+        shell.targetX - mine.x, shell.targetZ - mine.z
+      ) > shell.blastRadius) continue;
+      mine.detonated = true;
+      mine.detonationTimer = 0.45;
+      createMineExplosionEffects(mine);
+      player.score += 20;
+    }
+
+    for (const enemy of [...enemies]) {
+      const blastDistance = Math.hypot(
+        shell.targetX - enemy.x,
+        shell.targetZ - enemy.z,
+        enemy.elevation ?? 0
+      );
+      if (blastDistance > shell.blastRadius) continue;
+      if (getEnemyType(enemy).id === "ghost") revealGhost(enemy, 3, 0.18);
+      if (absorbPowerGeneratorShield(enemy, shell.targetX, shell.targetZ)) continue;
+      if (absorbEnemyShield(enemy, shell.targetX, shell.targetZ)) continue;
+      const damage = Math.max(1, Math.round(
+        shell.blastDamage * (1 - blastDistance / shell.blastRadius * 0.45)
+      ));
+      enemy.health -= damage;
+      enemy.hitFlash = 0.22;
+      if (enemy.health <= 0) {
+        destroyEnemy(enemy, shell.ownerRole ?? getLocalRole());
+      } else {
+        player.score += 25 * damage;
+        playMetalImpactSound(enemy.x, enemy.z, 0.82);
+      }
+    }
+  }
+
+  function updateBombardierShell(shell, dt) {
+    shell.trailTimer -= dt;
+    if (shell.trailTimer <= 0) {
+      shell.trail.push({ x: shell.x, y: shell.y, z: shell.z });
+      if (shell.trail.length > 12) shell.trail.shift();
+      shell.trailTimer = 0.07;
+    }
+    shell.elapsed = Math.min(shell.flightTime, shell.elapsed + dt);
+    shell.life = shell.flightTime - shell.elapsed;
+    shell.x = shell.startX + shell.vx * shell.elapsed;
+    shell.y = shell.startY + shell.launchVy * shell.elapsed -
+      0.5 * BOMBARDIER.GRAVITY * shell.elapsed * shell.elapsed;
+    shell.z = shell.startZ + shell.vz * shell.elapsed;
+    shell.vy = shell.launchVy - BOMBARDIER.GRAVITY * shell.elapsed;
+    if (shell.elapsed < shell.flightTime) return false;
+    shell.x = shell.targetX;
+    shell.y = 0;
+    shell.z = shell.targetZ;
+    explodeBombardierShell(shell);
+    return true;
+  }
+
   function updateShells(dt) {
     for (let i = shells.length - 1; i >= 0; i -= 1) {
       const shell = shells[i];
 
       if (shell.kind === "artillery") {
         if (updateArtilleryShell(shell, dt)) shells.splice(i, 1);
+        continue;
+      }
+      if (shell.kind === "bombardier") {
+        if (updateBombardierShell(shell, dt)) shells.splice(i, 1);
         continue;
       }
 
@@ -10964,6 +11702,26 @@
     if (progress >= 1) finishDropSequence();
   }
 
+  function updateRespawnSequence(dt) {
+    respawnElapsed = Math.min(DROP_SEQUENCE.DURATION, respawnElapsed + dt);
+    const progress = respawnElapsed / DROP_SEQUENCE.DURATION;
+    player.altitude = DROP_SEQUENCE.START_HEIGHT * (1 - progress * progress);
+    const leveling = Math.max(0, Math.min(1, (progress - 0.56) / 0.44));
+    const smoothLeveling = leveling * leveling * (3 - 2 * leveling);
+    cameraPitch = DROP_SEQUENCE.START_PITCH * (1 - smoothLeveling);
+    screenShake = Math.max(screenShake, 0.4 + progress * 1.8);
+    if (progress < 1) return;
+
+    respawnElapsed = -1;
+    player.altitude = 0;
+    cameraPitch = 0;
+    landingPulse = 1;
+    screenShake = 24;
+    createLandingDust();
+    tone(48, 0.42, "sawtooth", 0.1, -16);
+    tone(130, 0.16, "square", 0.045, -70);
+  }
+
   function updateScreenEffects(dt) {
     screenShake = Math.max(0, screenShake - dt * 24);
     flash = Math.max(0, flash - dt * 3.8);
@@ -11000,7 +11758,11 @@
       return;
     }
 
-    updatePlayer(dt);
+    if (respawnElapsed >= 0) {
+      updateRespawnSequence(dt);
+    } else {
+      updatePlayer(dt);
+    }
     updateMotorSound(dt);
     updateRemotePlayers(dt);
     updateReplicatedWorld(dt);
@@ -11021,6 +11783,7 @@
 
     for (const role of COOP_ROLES) {
       coopInvulnerability[role] = Math.max(0, coopInvulnerability[role] - dt);
+      coopRespawnTimers[role] = Math.max(0, coopRespawnTimers[role] - dt);
     }
 
     const survivalInProgress =
@@ -11114,11 +11877,33 @@
       paused ||
       gameOver ||
       isUpgradeActive() ||
+      respawnElapsed >= 0 ||
       missionPhase !== MISSION_PHASE.COMBAT
     ) return;
     recenteringTurret = false;
     player.turretOffset = normalizeAngle(player.turretOffset + event.movementX * 0.0025);
   });
+
+  document.addEventListener("wheel", (event) => {
+    if (
+      !pointerLocked ||
+      player.tankId !== "bombardier" ||
+      paused ||
+      gameOver ||
+      isUpgradeActive() ||
+      respawnElapsed >= 0 ||
+      missionPhase !== MISSION_PHASE.COMBAT
+    ) return;
+    event.preventDefault();
+    const wheelDelta = event.deltaY * (
+      event.deltaMode === 1 ? 30 : event.deltaMode === 2 ? 120 : 1
+    );
+    player.cannonElevation = Math.max(BOMBARDIER.MIN_ELEVATION, Math.min(
+      BOMBARDIER.MAX_ELEVATION,
+      player.cannonElevation -
+        Math.max(-120, Math.min(120, wheelDelta)) / 100 * BOMBARDIER.AIM_STEP
+    ));
+  }, { passive: false });
 
   document.addEventListener("mousedown", (event) => {
     if (event.button === 0 && pointerLocked) firePlayer();

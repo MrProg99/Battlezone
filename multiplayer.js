@@ -248,6 +248,10 @@
     } = firebase.databaseModule;
     const roomPath = `${ROOMS_PATH}/${roomCode}`;
     playerRef = ref(database, `${roomPath}/players/${session.role}`);
+    const roomPlayerRef = playerRef;
+    const onRoomError = (error) => {
+      if (playerRef === roomPlayerRef) setPhase("error", readableError(error));
+    };
 
     roomUnsubscribes.push(
       onValue(ref(database, `${roomPath}/meta`), (snapshot) => {
@@ -267,54 +271,59 @@
           session.phase = "error";
         }
         emit();
-      })
+      }, onRoomError)
     );
 
     roomUnsubscribes.push(
       onValue(ref(database, `${roomPath}/players`), (snapshot) => {
         session.players = snapshot.val() ?? {};
         emit();
-      })
+      }, onRoomError)
     );
 
     roomUnsubscribes.push(
       onValue(ref(database, `${roomPath}/world`), (snapshot) => {
         session.world = snapshot.val();
         emit();
-      })
+      }, onRoomError)
     );
 
     presenceUnsubscribe = onValue(
       ref(database, ".info/connected"),
       async (snapshot) => {
-        if (snapshot.val() !== true || !playerRef) return;
+        if (snapshot.val() !== true || playerRef !== roomPlayerRef) return;
         const activePlayerRef = playerRef;
         const activeRole = session.role;
-        const playerDisconnect = onDisconnect(activePlayerRef);
-        await playerDisconnect.remove();
-        if (playerRef !== activePlayerRef) {
-          await playerDisconnect.cancel();
-          return;
-        }
-        presenceDisconnect = playerDisconnect;
-        if (activeRole === "host") {
-          const metaDisconnect = onDisconnect(ref(database, `${roomPath}/meta`));
-          await metaDisconnect.update({
-            status: "closed",
-            maxPlayers: MAX_PLAYERS,
-            closedAt: serverTimestamp()
-          });
+        try {
+          const playerDisconnect = onDisconnect(activePlayerRef);
+          await playerDisconnect.remove();
           if (playerRef !== activePlayerRef) {
-            await metaDisconnect.cancel();
+            await playerDisconnect.cancel();
             return;
           }
-          hostDisconnect = metaDisconnect;
+          presenceDisconnect = playerDisconnect;
+          if (activeRole === "host") {
+            const metaDisconnect = onDisconnect(ref(database, `${roomPath}/meta`));
+            await metaDisconnect.update({
+              status: "closed",
+              maxPlayers: MAX_PLAYERS,
+              closedAt: serverTimestamp()
+            });
+            if (playerRef !== activePlayerRef) {
+              await metaDisconnect.cancel();
+              return;
+            }
+            hostDisconnect = metaDisconnect;
+          }
+          await update(activePlayerRef, {
+            connected: true,
+            lastConnectedAt: Date.now()
+          });
+        } catch (error) {
+          onRoomError(error);
         }
-        await update(activePlayerRef, {
-          connected: true,
-          lastConnectedAt: Date.now()
-        });
-      }
+      },
+      onRoomError
     );
   }
 
@@ -701,9 +710,10 @@
   }
 
   function readableError(error) {
-    const code = String(error?.code ?? "");
+    const code = `${error?.code ?? ""} ${error?.message ?? ""}`
+      .toLowerCase().replace(/_/g, "-");
     if (code.includes("permission-denied")) {
-      return "Accès refusé par les règles Firebase. Vérifiez firebase.rules.json.";
+      return "Accès refusé par Firebase. Publiez les règles à jour de firebase.rules.json dans Realtime Database > Règles (compatibles avec le Bombardier).";
     }
     if (code.includes("network-request-failed")) {
       return "Connexion à Firebase impossible.";

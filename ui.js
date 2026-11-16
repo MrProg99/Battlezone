@@ -94,8 +94,10 @@
         getDefaultPlayerName(snapshot.role);
       elements.roomPlayerCount.textContent =
         `${snapshot.playerCount} / ${maxPlayers} chars connectés // ${localName}`;
-      elements.networkStatus.classList.remove("error");
-      if (snapshot.meta?.status === "closed") {
+      elements.networkStatus.classList.toggle("error", Boolean(snapshot.error));
+      if (snapshot.error) {
+        elements.networkStatus.textContent = snapshot.error;
+      } else if (snapshot.meta?.status === "closed") {
         elements.networkStatus.textContent = "L’hôte a fermé ce salon.";
       } else if (roomReady) {
         if (roomFull) {
@@ -112,7 +114,7 @@
       }
 
       elements.startButton.disabled =
-        !isHost || !roomReady || snapshot.meta?.status !== "lobby";
+        Boolean(snapshot.error) || !isHost || !roomReady || snapshot.meta?.status !== "lobby";
       elements.startButtonLabel.textContent = isHost
         ? snapshot.meta?.startedAt
           ? "Relancer la mission coop"

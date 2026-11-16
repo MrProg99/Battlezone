@@ -9,6 +9,7 @@
       "firebase.rules.json",
       "**/.*",
       "**/node_modules/**",
+      "tests/**",
       "README.md"
     ]
   }

@@ -62,6 +62,25 @@ firebase use --add
 firebase deploy
 ```
 
+Après l'ajout d'un châssis jouable, republier aussi `firebase.rules.json` : les
+règles valident le tank du joueur et celui de son état réseau pour les trois
+places du salon. Des règles anciennes refusent notamment le Bombardier avec
+`PERMISSION_DENIED`. Dans la console du projet configuré, ouvrir **Realtime
+Database > Règles**, remplacer le contenu par ce fichier puis cliquer sur
+**Publier**. Republier uniquement le site ne met pas les règles à jour.
+Les règles permettent également le départ du dernier joueur d'un salon existant,
+nécessaire pour enregistrer la présence avec `onDisconnect().remove()`.
+
+Pour vérifier les validations locales des châssis et le traitement des erreurs
+réseau, sans connexion à Firebase :
+
+```powershell
+node --test tests/coop.test.cjs
+```
+
+Ces tests évaluent les expressions locales et simulent les rappels réseau; ils
+ne vérifient pas les règles effectivement publiées dans Firebase.
+
 La configuration Web Firebase est publique par conception. Ne jamais y placer
 de secret; l’accès est protégé par l’authentification anonyme et les règles de
 Realtime Database.
